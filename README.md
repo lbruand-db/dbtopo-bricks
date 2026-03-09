@@ -1,5 +1,9 @@
 # dbtopo-bricks
 
+[![CI](https://github.com/lbruand-db/dbtopo-bricks/actions/workflows/ci.yml/badge.svg)](https://github.com/lbruand-db/dbtopo-bricks/actions/workflows/ci.yml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+
 Load the [IGN BD TOPO](https://geoservices.ign.fr/bdtopo) database (French national topographic dataset) into Databricks Delta tables with geometry support.
 
 ## What it does
@@ -9,8 +13,16 @@ Downloads department-level GeoPackage (GPKG) files from IGN's GeoServices, extra
 ## Pipeline
 
 ```
-Download (.7z from IGN) → Extract (py7zr) → Read (fiona, batched) → Transform (reproject to WGS84, WKT) → Write (Delta)
+Download (.7z from IGN) → Extract (py7zr) → Read (pyogrio, batched) → Transform (reproject to WGS84, WKT) → Write (Delta)
 ```
+
+## CI
+
+Every push and pull request to `main` runs three jobs via GitHub Actions:
+
+- **lint** — `ruff check` and `ruff format --check`
+- **typecheck** — `ty check`
+- **test** — `pytest` with the GPKG test fixtures
 
 ## Quick start
 
@@ -90,12 +102,13 @@ dbtopo-bricks/
 │   ├── config.py               # Pydantic configuration
 │   ├── downloader.py           # IGN download with retry
 │   ├── extractor.py            # 7z extraction
-│   ├── gpkg_reader.py          # Batched fiona/geopandas reader
+│   ├── gpkg_reader.py          # Batched pyogrio/geopandas reader
 │   ├── transformer.py          # Reproject + WKT conversion
 │   └── writer.py               # Delta table writer
 ├── tests/
 │   ├── fixtures/
-│   │   └── test_D001_batiment.gpkg  # 10k features for testing
+│   │   ├── test_D001_batiment.gpkg      # 10k features for testing
+│   │   └── test_bad_datetime.gpkg       # Malformed datetime regression test
 │   ├── test_config.py
 │   ├── test_downloader.py
 │   ├── test_extractor.py
@@ -112,9 +125,12 @@ dbtopo-bricks/
 | --------- | ------- |
 | Download | requests (with retry) |
 | Archive extraction | py7zr |
-| GPKG reading | fiona, geopandas |
+| GPKG reading | pyogrio, geopandas |
 | Geometry ops | shapely, pyproj |
 | Spark / Delta | pyspark (Databricks Runtime) |
 | Package manager | uv |
 | Deployment | Databricks Asset Bundles |
 | Orchestration | Databricks Jobs (serverless) |
+| Linting | ruff |
+| Type checking | ty |
+| CI | GitHub Actions |
