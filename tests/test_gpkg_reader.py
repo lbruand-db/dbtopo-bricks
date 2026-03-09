@@ -4,6 +4,7 @@ import pytest
 from pathlib import Path
 
 GPKG_TEST_PATH = Path(__file__).parent / "fixtures" / "test_D001_batiment.gpkg"
+BAD_DATETIME_GPKG = Path(__file__).parent / "fixtures" / "test_bad_datetime.gpkg"
 
 
 @pytest.fixture
@@ -32,3 +33,23 @@ def test_read_layer_batched(gpkg_path):
     assert batch_idx == 0
     assert len(gdf) > 0
     assert len(gdf) <= 100
+
+
+def test_read_bad_datetime_gpkg():
+    """Regression test: pyogrio reads malformed datetime (seconds=60) without error."""
+    if not BAD_DATETIME_GPKG.exists():
+        pytest.skip(f"Bad datetime GPKG not found at {BAD_DATETIME_GPKG}")
+
+    from dbtopo.gpkg_reader import read_layer
+    from dbtopo.transformer import transform_batch
+
+    gdf = read_layer(BAD_DATETIME_GPKG, "batiment")
+    assert len(gdf) == 1
+
+    # Transform should produce consistent string types for all columns
+    result = transform_batch(gdf, dept="D001", layer="batiment")
+    assert len(result) == 1
+    assert "dept" in result.columns
+
+    # date_modification should be readable (the malformed field with seconds=60)
+    assert "date_modification" in result.columns

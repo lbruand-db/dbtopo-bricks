@@ -26,6 +26,17 @@ def add_metadata(gdf: gpd.GeoDataFrame, dept: str, layer: str) -> gpd.GeoDataFra
     return gdf
 
 
+def normalize_datetimes(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Convert all datetime columns to ISO strings for consistent Delta schema."""
+    import numpy as np
+
+    gdf = gdf.copy()
+    for col in gdf.columns:
+        if hasattr(gdf[col], "dt") and np.issubdtype(gdf[col].dtype, np.datetime64):
+            gdf[col] = gdf[col].dt.strftime("%Y-%m-%dT%H:%M:%S").replace("NaT", None)
+    return gdf
+
+
 def transform_batch(
     gdf: gpd.GeoDataFrame,
     dept: str,
@@ -33,6 +44,7 @@ def transform_batch(
     target_crs: str = "EPSG:4326",
 ) -> gpd.GeoDataFrame:
     gdf = reproject(gdf, target_crs)
+    gdf = normalize_datetimes(gdf)
     gdf = geometry_to_wkt(gdf)
     gdf = add_metadata(gdf, dept, layer)
     return gdf

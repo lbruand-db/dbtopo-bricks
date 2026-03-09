@@ -103,7 +103,7 @@ resources:
               - "numpy<2"
               - py7zr
               - geopandas
-              - fiona
+              - pyogrio
               - shapely
               - pyproj
               - tqdm

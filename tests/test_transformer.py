@@ -1,7 +1,8 @@
+import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
 
-from dbtopo.transformer import reproject, geometry_to_wkt, add_metadata, transform_batch
+from dbtopo.transformer import reproject, geometry_to_wkt, add_metadata, normalize_datetimes, transform_batch
 
 
 def _make_gdf(crs="EPSG:2154"):
@@ -40,6 +41,35 @@ def test_add_metadata():
     result = add_metadata(gdf, "D001", "batiment")
     assert result["dept"].iloc[0] == "D001"
     assert result["layer"].iloc[0] == "batiment"
+
+
+def test_normalize_datetimes():
+    gdf = gpd.GeoDataFrame(
+        {
+            "name": ["A"],
+            "date_creation": pd.to_datetime(["2021-12-15T17:30:00"]),
+            "some_int": [42],
+        },
+        geometry=[Point(0, 0)],
+        crs="EPSG:4326",
+    )
+    result = normalize_datetimes(gdf)
+    assert result["date_creation"].iloc[0] == "2021-12-15T17:30:00"
+    assert not pd.api.types.is_datetime64_any_dtype(result["date_creation"])
+    assert result["some_int"].iloc[0] == 42  # non-datetime untouched
+
+
+def test_normalize_datetimes_with_nat():
+    gdf = gpd.GeoDataFrame(
+        {
+            "date_creation": pd.to_datetime(["2021-12-15T17:30:00", pd.NaT]),
+        },
+        geometry=[Point(0, 0), Point(1, 1)],
+        crs="EPSG:4326",
+    )
+    result = normalize_datetimes(gdf)
+    assert result["date_creation"].iloc[0] == "2021-12-15T17:30:00"
+    assert pd.isna(result["date_creation"].iloc[1])
 
 
 def test_transform_batch():
