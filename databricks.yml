@@ -92,6 +92,7 @@ resources:
             client: "1"
             dependencies:
               - "dist/*.whl"
+              - "numpy<2"
               - click
               - pydantic
               - pyyaml
