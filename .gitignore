@@ -1,0 +1,7 @@
+.idea/
+.venv/
+__pycache__/
+*.pyc
+dist/
+*.egg-info/
+.pytest_cache/

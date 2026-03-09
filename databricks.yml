@@ -1,0 +1,118 @@
+bundle:
+  name: dbtopo-bricks
+
+variables:
+  catalog:
+    default: "dev_catalog"
+  schema:
+    default: "ign_bdtopo"
+  volume:
+    default: "bronze_volume"
+  departments:
+    default: "001"
+  version_date:
+    default: "2025-09-15"
+
+artifacts:
+  dbtopo_wheel:
+    type: whl
+    path: .
+    build: uv build --wheel --out-dir dist
+
+resources:
+  jobs:
+    bdtopo_load:
+      name: "bdtopo-load-${bundle.target}"
+      tasks:
+        - task_key: setup_catalog
+          notebook_task:
+            notebook_path: notebooks/00_setup_catalog.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              schema: "${var.schema}"
+              volume: "${var.volume}"
+          environment_key: default
+        - task_key: download
+          depends_on:
+            - task_key: setup_catalog
+          python_wheel_task:
+            package_name: dbtopo
+            entry_point: download
+            parameters:
+              - "--departments"
+              - "${var.departments}"
+              - "--catalog"
+              - "${var.catalog}"
+              - "--schema"
+              - "${var.schema}"
+              - "--volume"
+              - "${var.volume}"
+              - "--version-date"
+              - "${var.version_date}"
+          libraries:
+            - whl: ./dist/*.whl
+          environment_key: default
+        - task_key: extract_and_load
+          depends_on:
+            - task_key: download
+          python_wheel_task:
+            package_name: dbtopo
+            entry_point: load
+            parameters:
+              - "--departments"
+              - "${var.departments}"
+              - "--catalog"
+              - "${var.catalog}"
+              - "--schema"
+              - "${var.schema}"
+              - "--volume"
+              - "${var.volume}"
+          libraries:
+            - whl: ./dist/*.whl
+            - pypi:
+                package: py7zr
+            - pypi:
+                package: geopandas
+            - pypi:
+                package: fiona
+          environment_key: default
+        - task_key: validate
+          depends_on:
+            - task_key: extract_and_load
+          python_wheel_task:
+            package_name: dbtopo
+            entry_point: validate
+            parameters:
+              - "--catalog"
+              - "${var.catalog}"
+              - "--schema"
+              - "${var.schema}"
+              - "--departments"
+              - "${var.departments}"
+          libraries:
+            - whl: ./dist/*.whl
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      catalog: "dev_catalog"
+      departments: "001"
+  staging:
+    variables:
+      catalog: "staging_catalog"
+      departments: "001,075,092"
+  prod:
+    mode: production
+    variables:
+      catalog: "prod_catalog"
+      departments: "all"
+    run_as:
+      service_principal_name: "bdtopo-service-principal"
