@@ -3,8 +3,7 @@
 import pytest
 from pathlib import Path
 
-# Set this env var or fixture path to run integration tests
-GPKG_TEST_PATH = Path("/tmp/bdtopo_test/test.gpkg")
+GPKG_TEST_PATH = Path(__file__).parent / "fixtures" / "test_D001_batiment.gpkg"
 
 
 @pytest.fixture
