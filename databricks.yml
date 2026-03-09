@@ -31,7 +31,7 @@ resources:
               catalog: "${var.catalog}"
               schema: "${var.schema}"
               volume: "${var.volume}"
-          environment_key: default
+          environment_key: minimal
         - task_key: download
           depends_on:
             - task_key: setup_catalog
@@ -49,9 +49,7 @@ resources:
               - "${var.volume}"
               - "--version-date"
               - "${var.version_date}"
-          libraries:
-            - whl: ./dist/*.whl
-          environment_key: default
+          environment_key: geo
         - task_key: extract_and_load
           depends_on:
             - task_key: download
@@ -67,15 +65,9 @@ resources:
               - "${var.schema}"
               - "--volume"
               - "${var.volume}"
-          libraries:
-            - whl: ./dist/*.whl
-            - pypi:
-                package: py7zr
-            - pypi:
-                package: geopandas
-            - pypi:
-                package: fiona
-          environment_key: default
+              - "--layers"
+              - "batiment"
+          environment_key: geo
         - task_key: validate
           depends_on:
             - task_key: extract_and_load
@@ -89,21 +81,45 @@ resources:
               - "${var.schema}"
               - "--departments"
               - "${var.departments}"
-          libraries:
-            - whl: ./dist/*.whl
-          environment_key: default
+          environment_key: wheel_only
 
       environments:
-        - environment_key: default
+        - environment_key: minimal
           spec:
             client: "1"
+        - environment_key: wheel_only
+          spec:
+            client: "1"
+            dependencies:
+              - "dist/*.whl"
+              - click
+              - pydantic
+              - pyyaml
+        - environment_key: geo
+          spec:
+            client: "1"
+            dependencies:
+              - "dist/*.whl"
+              - "numpy<2"
+              - py7zr
+              - geopandas
+              - fiona
+              - shapely
+              - pyproj
+              - tqdm
+              - requests
+              - pydantic
+              - pyyaml
+              - click
 
 targets:
   dev:
     mode: development
     default: true
+    workspace:
+      host: https://e2-demo-field-eng.cloud.databricks.com
     variables:
-      catalog: "dev_catalog"
+      catalog: "lucasbruand_catalog"
       departments: "001"
   staging:
     variables:

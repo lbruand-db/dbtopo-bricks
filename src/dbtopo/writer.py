@@ -9,7 +9,7 @@ def write_batch_to_delta(
     table_name: str,
 ) -> None:
     sdf = spark.createDataFrame(pdf)
-    sdf.write.format("delta").mode("append").saveAsTable(table_name)
+    sdf.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(table_name)
 
 
 def full_table_name(catalog: str, schema: str, table_prefix: str, layer: str) -> str:

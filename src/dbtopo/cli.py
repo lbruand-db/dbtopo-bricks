@@ -5,7 +5,7 @@ import sys
 import click
 from tqdm import tqdm
 
-from dbtopo.config import AppConfig, ALL_DEPARTMENTS
+from dbtopo.config import ALL_DEPARTMENTS
 from dbtopo.downloader import download_department
 from dbtopo.extractor import extract_gpkg
 from dbtopo.gpkg_reader import list_layers, read_layer_batched
@@ -33,7 +33,7 @@ def main():
 @click.option("--version", default="3-5")
 @click.option("--projection", default="LAMB93")
 @click.option("--version-date", default="2025-09-15")
-def download(departments, catalog, schema, volume, version, projection, version_date):
+def download_cmd(departments, catalog, schema, volume, version, projection, version_date):
     """Download BD TOPO .7z archives to a Databricks Volume."""
     dept_list = _parse_departments(departments)
     volume_path = f"/Volumes/{catalog}/{schema}/{volume}"
@@ -62,7 +62,7 @@ def download(departments, catalog, schema, volume, version, projection, version_
 @click.option("--layers", default="", help="Comma-separated layer names, or empty for all")
 @click.option("--batch-size", default=10000, type=int)
 @click.option("--table-prefix", default="ign_bdtopo_")
-def load(departments, catalog, schema, volume, version, projection, version_date, layers, batch_size, table_prefix):
+def load_cmd(departments, catalog, schema, volume, version, projection, version_date, layers, batch_size, table_prefix):
     """Extract GPKG from archives, transform, and load into Delta tables."""
     from pyspark.sql import SparkSession
 
@@ -113,7 +113,7 @@ def load(departments, catalog, schema, volume, version, projection, version_date
 @click.option("--schema", default="ign_bdtopo")
 @click.option("--departments", required=True)
 @click.option("--table-prefix", default="ign_bdtopo_")
-def validate(catalog, schema, departments, table_prefix):
+def validate_cmd(catalog, schema, departments, table_prefix):
     """Validate loaded data by checking row counts."""
     from pyspark.sql import SparkSession
 
@@ -145,6 +145,20 @@ def validate(catalog, schema, departments, table_prefix):
         sys.exit(1)
 
     print("Validation passed.")
+
+
+# Databricks python_wheel_task entry points.
+# These call click commands with standalone_mode=False to avoid sys.exit(0).
+def download():
+    download_cmd(standalone_mode=False)
+
+
+def load():
+    load_cmd(standalone_mode=False)
+
+
+def validate():
+    validate_cmd(standalone_mode=False)
 
 
 if __name__ == "__main__":
