@@ -26,14 +26,18 @@ def main():
 
 
 @main.command()
-@click.option("--departments", required=True, help="Comma-separated dept codes or 'all'")
+@click.option(
+    "--departments", required=True, help="Comma-separated dept codes or 'all'"
+)
 @click.option("--catalog", required=True)
 @click.option("--schema", default="ign_bdtopo")
 @click.option("--volume", default="bronze_volume")
 @click.option("--version", default="3-5")
 @click.option("--projection", default="LAMB93")
 @click.option("--version-date", default="2025-09-15")
-def download_cmd(departments, catalog, schema, volume, version, projection, version_date):
+def download_cmd(
+    departments, catalog, schema, volume, version, projection, version_date
+):
     """Download BD TOPO .7z archives to a Databricks Volume."""
     dept_list = _parse_departments(departments)
     volume_path = f"/Volumes/{catalog}/{schema}/{volume}"
@@ -52,17 +56,32 @@ def download_cmd(departments, catalog, schema, volume, version, projection, vers
 
 
 @main.command()
-@click.option("--departments", required=True, help="Comma-separated dept codes or 'all'")
+@click.option(
+    "--departments", required=True, help="Comma-separated dept codes or 'all'"
+)
 @click.option("--catalog", required=True)
 @click.option("--schema", default="ign_bdtopo")
 @click.option("--volume", default="bronze_volume")
 @click.option("--version", default="3-5")
 @click.option("--projection", default="LAMB93")
 @click.option("--version-date", default="2025-09-15")
-@click.option("--layers", default="", help="Comma-separated layer names, or empty for all")
+@click.option(
+    "--layers", default="", help="Comma-separated layer names, or empty for all"
+)
 @click.option("--batch-size", default=10000, type=int)
 @click.option("--table-prefix", default="ign_bdtopo_")
-def load_cmd(departments, catalog, schema, volume, version, projection, version_date, layers, batch_size, table_prefix):
+def load_cmd(
+    departments,
+    catalog,
+    schema,
+    volume,
+    version,
+    projection,
+    version_date,
+    layers,
+    batch_size,
+    table_prefix,
+):
     """Extract GPKG from archives, transform, and load into Delta tables."""
     from pyspark.sql import SparkSession
 
@@ -70,11 +89,13 @@ def load_cmd(departments, catalog, schema, volume, version, projection, version_
 
     dept_list = _parse_departments(departments)
     volume_path = f"/Volumes/{catalog}/{schema}/{volume}"
-    layer_filter = [l.strip() for l in layers.split(",") if l.strip()] if layers else []
+    layer_filter = [x.strip() for x in layers.split(",") if x.strip()] if layers else []
 
     for dept in dept_list:
         dept_code = dept if dept.startswith("D") else f"D{dept}"
-        base_name = f"BDTOPO_{version}_TOUSTHEMES_GPKG_{projection}_{dept_code}_{version_date}"
+        base_name = (
+            f"BDTOPO_{version}_TOUSTHEMES_GPKG_{projection}_{dept_code}_{version_date}"
+        )
         archive_path = f"{volume_path}/{base_name}.7z"
 
         print(f"Extracting {archive_path}...")
@@ -92,7 +113,9 @@ def load_cmd(departments, catalog, schema, volume, version, projection, version_
             print(f"  Loading layer {layer_name} -> {table}")
 
             pbar = None
-            for batch_idx, processed, total, gdf in read_layer_batched(gpkg_path, layer_name, batch_size):
+            for batch_idx, processed, total, gdf in read_layer_batched(
+                gpkg_path, layer_name, batch_size
+            ):
                 if batch_idx == 0:
                     pbar = tqdm(total=total, desc=f"    {layer_name}")
 
@@ -119,7 +142,7 @@ def validate_cmd(catalog, schema, departments, table_prefix):
 
     spark = SparkSession.builder.getOrCreate()
 
-    dept_list = _parse_departments(departments)
+    _parse_departments(departments)  # validate format
     tables = [
         row.tableName
         for row in spark.sql(f"SHOW TABLES IN {catalog}.{schema}").collect()

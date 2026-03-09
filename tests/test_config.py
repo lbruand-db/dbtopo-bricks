@@ -1,4 +1,4 @@
-from dbtopo.config import AppConfig, ALL_DEPARTMENTS
+from dbtopo.config import ALL_DEPARTMENTS, AppConfig
 
 
 def test_default_config():

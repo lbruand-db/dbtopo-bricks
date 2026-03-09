@@ -16,13 +16,15 @@ def build_download_url(
     version_date: str,
 ) -> str:
     dept_code = dept if dept.startswith("D") else f"D{dept}"
-    base_name = f"BDTOPO_{version}_TOUSTHEMES_GPKG_{projection}_{dept_code}_{version_date}"
-    return (
-        f"https://data.geopf.fr/telechargement/download/BDTOPO/{base_name}/{base_name}.7z"
+    base_name = (
+        f"BDTOPO_{version}_TOUSTHEMES_GPKG_{projection}_{dept_code}_{version_date}"
     )
+    return f"https://data.geopf.fr/telechargement/download/BDTOPO/{base_name}/{base_name}.7z"
 
 
-def _make_session(max_retries: int = 5, backoff_factor: float = 1.0) -> requests.Session:
+def _make_session(
+    max_retries: int = 5, backoff_factor: float = 1.0
+) -> requests.Session:
     session = requests.Session()
     retries = Retry(
         total=max_retries,
@@ -55,7 +57,9 @@ def download_file(
         total_size = int(r.headers.get("content-length", 0))
         with (
             open(dest_path, "wb") as f,
-            tqdm(total=total_size, unit="B", unit_scale=True, desc=dest_path.name) as pbar,
+            tqdm(
+                total=total_size, unit="B", unit_scale=True, desc=dest_path.name
+            ) as pbar,
         ):
             for chunk in r.iter_content(chunk_size=chunk_size):
                 if chunk:

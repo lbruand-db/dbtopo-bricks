@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-
 # All 96 metropolitan department codes
 ALL_DEPARTMENTS = [f"{i:03d}" for i in range(1, 96)] + ["2A", "2B"]
 
@@ -33,7 +32,8 @@ class AppConfig(BaseModel):
     transform: TransformConfig = TransformConfig()
 
     def volume_path(self) -> str:
-        return f"/Volumes/{self.databricks.catalog}/{self.databricks.schema_name}/{self.databricks.volume}"
+        db = self.databricks
+        return f"/Volumes/{db.catalog}/{db.schema_name}/{db.volume}"
 
     def resolve_departments(self) -> list[str]:
         if self.ign.departments == ["all"]:

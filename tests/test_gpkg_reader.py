@@ -1,7 +1,8 @@
 """Tests for gpkg_reader require a real GPKG file. Skipped if not available."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 GPKG_TEST_PATH = Path(__file__).parent / "fixtures" / "test_D001_batiment.gpkg"
 BAD_DATETIME_GPKG = Path(__file__).parent / "fixtures" / "test_bad_datetime.gpkg"

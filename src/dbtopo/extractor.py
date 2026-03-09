@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -20,7 +19,9 @@ def find_gpkg_in_archive(archive_path: str | Path) -> str:
     return gpkg_files[0]
 
 
-def extract_gpkg(archive_path: str | Path, output_dir: str | Path | None = None) -> Path:
+def extract_gpkg(
+    archive_path: str | Path, output_dir: str | Path | None = None
+) -> Path:
     archive_path = Path(archive_path)
     gpkg_name = find_gpkg_in_archive(archive_path)
 
