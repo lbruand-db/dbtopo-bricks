@@ -19,9 +19,29 @@ def write_batch_to_delta(
     )
 
 
-def set_table_geo_metadata(spark, table_name: str, crs: str = "EPSG:4326") -> None:
-    """Set CRS table property and geometry column comment."""
-    spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('crs' = '{crs}')")
+def set_table_geo_metadata(
+    spark,
+    table_name: str,
+    crs: str = "EPSG:4326",
+    source_schema: str = "",
+    version: str = "",
+    version_date: str = "",
+) -> None:
+    """Set CRS, source info as table properties and comments."""
+    props = f"'crs' = '{crs}'"
+    comment_parts = [f"IGN BD TOPO {version}"]
+    if source_schema:
+        props += f", 'source_schema' = '{source_schema}'"
+    if version:
+        props += f", 'bdtopo_version' = '{version}'"
+    if version_date:
+        props += f", 'bdtopo_version_date' = '{version_date}'"
+        comment_parts.append(f"date={version_date}")
+    comment_parts.append(f"geometry={crs}")
+    comment = ", ".join(comment_parts)
+
+    spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ({props})")
+    spark.sql(f"COMMENT ON TABLE {table_name} IS '{comment}'")
     spark.sql(
         f"ALTER TABLE {table_name} ALTER COLUMN geometry COMMENT 'WKT geometry ({crs})'"
     )

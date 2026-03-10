@@ -70,6 +70,9 @@ def download_cmd(
         _set_task_value(spark, f"archive_path_{dept}", str(path))
 
     _set_task_value(spark, "departments", dept_list)
+    _set_task_value(spark, "schema", schema)
+    _set_task_value(spark, "version", version)
+    _set_task_value(spark, "version_date", version_date)
     print(f"Download complete: {len(dept_list)} department(s).")
 
 
@@ -153,7 +156,13 @@ def load_cmd(
                 layer_rows += len(gdf)
 
                 if batch_idx == 0:
-                    set_table_geo_metadata(spark, table)
+                    set_table_geo_metadata(
+                        spark,
+                        table,
+                        source_schema=schema,
+                        version=version,
+                        version_date=version_date,
+                    )
 
                 if pbar:
                     pbar.update(len(gdf))
@@ -165,6 +174,9 @@ def load_cmd(
             _set_task_value(spark, f"rows_{dept}_{layer_name}", layer_rows)
 
     _set_task_value(spark, "rows_total", rows_loaded)
+    _set_task_value(spark, "schema", schema)
+    _set_task_value(spark, "version", version)
+    _set_task_value(spark, "version_date", version_date)
     print("Load complete.")
 
 
