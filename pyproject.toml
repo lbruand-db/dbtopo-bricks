@@ -26,6 +26,7 @@ dbtopo = "dbtopo.cli:main"
 [project.entry-points."databricks"]
 download = "dbtopo.cli:download"
 load = "dbtopo.cli:load"
+dedup = "dbtopo.cli:dedup"
 validate = "dbtopo.cli:validate"
 
 [tool.hatch.build.targets.wheel]

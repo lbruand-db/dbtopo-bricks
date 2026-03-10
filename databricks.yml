@@ -78,9 +78,21 @@ resources:
                   - "--layers"
                   - "batiment"
               environment_key: geo
-        - task_key: validate
+        - task_key: dedup
           depends_on:
             - task_key: extract_and_load
+          python_wheel_task:
+            package_name: dbtopo
+            entry_point: dedup
+            parameters:
+              - "--catalog"
+              - "${var.catalog}"
+              - "--schema"
+              - "${var.schema}"
+          environment_key: wheel_only
+        - task_key: validate
+          depends_on:
+            - task_key: dedup
           python_wheel_task:
             package_name: dbtopo
             entry_point: validate

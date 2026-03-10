@@ -6,10 +6,12 @@ import click
 from tqdm import tqdm
 
 from dbtopo.config import ALL_DEPARTMENTS
+from dbtopo.dedup import dedup_tables
 from dbtopo.downloader import download_department
 from dbtopo.extractor import extract_gpkg
 from dbtopo.gpkg_reader import list_layers, read_layer_batched
 from dbtopo.schema import spark_schema_from_gpkg
+from dbtopo.task_values import set_task_value
 from dbtopo.transformer import transform_batch
 from dbtopo.writer import full_table_name, set_table_geo_metadata, write_batch_to_delta
 
@@ -18,17 +20,6 @@ def _parse_departments(departments: str) -> list[str]:
     if departments.strip().lower() == "all":
         return ALL_DEPARTMENTS
     return [d.strip() for d in departments.split(",")]
-
-
-def _set_task_value(spark, key: str, value: object) -> None:
-    """Set a Databricks job task value. No-op outside a job context."""
-    try:
-        from pyspark.dbutils import DBUtils
-
-        dbutils = DBUtils(spark)
-        dbutils.jobs.taskValues.set(key=key, value=value)
-    except Exception:
-        pass
 
 
 @click.group()
@@ -67,12 +58,12 @@ def download_cmd(
             projection=projection,
             version_date=version_date,
         )
-        _set_task_value(spark, f"archive_path_{dept}", str(path))
+        set_task_value(spark, f"archive_path_{dept}", str(path))
 
-    _set_task_value(spark, "departments", dept_list)
-    _set_task_value(spark, "schema", schema)
-    _set_task_value(spark, "version", version)
-    _set_task_value(spark, "version_date", version_date)
+    set_task_value(spark, "departments", dept_list)
+    set_task_value(spark, "schema", schema)
+    set_task_value(spark, "version", version)
+    set_task_value(spark, "version_date", version_date)
     print(f"Download complete: {len(dept_list)} department(s).")
 
 
@@ -171,13 +162,42 @@ def load_cmd(
                 pbar.close()
 
             rows_loaded[layer_name] = rows_loaded.get(layer_name, 0) + layer_rows
-            _set_task_value(spark, f"rows_{dept}_{layer_name}", layer_rows)
+            set_task_value(spark, f"rows_{dept}_{layer_name}", layer_rows)
 
-    _set_task_value(spark, "rows_total", rows_loaded)
-    _set_task_value(spark, "schema", schema)
-    _set_task_value(spark, "version", version)
-    _set_task_value(spark, "version_date", version_date)
+    set_task_value(spark, "rows_total", rows_loaded)
+    set_task_value(spark, "schema", schema)
+    set_task_value(spark, "version", version)
+    set_task_value(spark, "version_date", version_date)
     print("Load complete.")
+
+
+@main.command()
+@click.option("--catalog", required=True)
+@click.option("--schema", default="ign_bdtopo")
+@click.option("--table-prefix", default="ign_bdtopo_")
+@click.option("--dedup-key", default="cleabs")
+@click.option("--dedup-suffix", default="_dedup")
+def dedup_cmd(catalog, schema, table_prefix, dedup_key, dedup_suffix):
+    """Deduplicate all loaded tables by cleabs into *_dedup tables."""
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.getOrCreate()
+
+    stats = dedup_tables(
+        spark,
+        catalog=catalog,
+        schema=schema,
+        table_prefix=table_prefix,
+        dedup_key=dedup_key,
+        dedup_suffix=dedup_suffix,
+    )
+
+    if not stats:
+        print(f"No tables found with prefix '{table_prefix}' in {catalog}.{schema}")
+        sys.exit(1)
+
+    set_task_value(spark, "dedup_stats", stats)
+    print("Deduplication complete.")
 
 
 @main.command()
@@ -225,6 +245,10 @@ def download():
 
 def load():
     load_cmd(standalone_mode=False)
+
+
+def dedup():
+    dedup_cmd(standalone_mode=False)
 
 
 def validate():
