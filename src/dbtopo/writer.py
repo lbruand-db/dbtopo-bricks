@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import pandas as pd
+from pyspark.sql.types import StructType
 
 
 def write_batch_to_delta(
     spark,
     pdf: pd.DataFrame,
     table_name: str,
+    schema: StructType | None = None,
 ) -> None:
-    sdf = spark.createDataFrame(pdf)
+    if schema is not None:
+        sdf = spark.createDataFrame(pdf, schema=schema)
+    else:
+        sdf = spark.createDataFrame(pdf)
     sdf.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(
         table_name
     )

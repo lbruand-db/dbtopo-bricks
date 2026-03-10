@@ -9,6 +9,7 @@ from dbtopo.config import ALL_DEPARTMENTS
 from dbtopo.downloader import download_department
 from dbtopo.extractor import extract_gpkg
 from dbtopo.gpkg_reader import list_layers, read_layer_batched
+from dbtopo.schema import spark_schema_from_gpkg
 from dbtopo.transformer import transform_batch
 from dbtopo.writer import full_table_name, write_batch_to_delta
 
@@ -112,6 +113,14 @@ def load_cmd(
             table = full_table_name(catalog, schema, table_prefix, layer_name)
             print(f"  Loading layer {layer_name} -> {table}")
 
+            from pyspark.sql.types import StringType
+
+            layer_schema = spark_schema_from_gpkg(
+                gpkg_path,
+                layer_name,
+                extra_columns={"dept": StringType(), "layer": StringType()},
+            )
+
             pbar = None
             for batch_idx, processed, total, gdf in read_layer_batched(
                 gpkg_path, layer_name, batch_size
@@ -120,7 +129,7 @@ def load_cmd(
                     pbar = tqdm(total=total, desc=f"    {layer_name}")
 
                 gdf = transform_batch(gdf, dept=dept_code, layer=layer_name)
-                write_batch_to_delta(spark, gdf, table)
+                write_batch_to_delta(spark, gdf, table, schema=layer_schema)
 
                 if pbar:
                     pbar.update(len(gdf))
