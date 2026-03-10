@@ -11,7 +11,7 @@ from dbtopo.extractor import extract_gpkg
 from dbtopo.gpkg_reader import list_layers, read_layer_batched
 from dbtopo.schema import spark_schema_from_gpkg
 from dbtopo.transformer import transform_batch
-from dbtopo.writer import full_table_name, write_batch_to_delta
+from dbtopo.writer import full_table_name, set_table_geo_metadata, write_batch_to_delta
 
 
 def _parse_departments(departments: str) -> list[str]:
@@ -130,6 +130,9 @@ def load_cmd(
 
                 gdf = transform_batch(gdf, dept=dept_code, layer=layer_name)
                 write_batch_to_delta(spark, gdf, table, schema=layer_schema)
+
+                if batch_idx == 0:
+                    set_table_geo_metadata(spark, table)
 
                 if pbar:
                     pbar.update(len(gdf))

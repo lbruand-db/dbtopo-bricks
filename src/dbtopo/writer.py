@@ -19,5 +19,14 @@ def write_batch_to_delta(
     )
 
 
+def set_table_geo_metadata(spark, table_name: str, crs: str = "EPSG:4326") -> None:
+    """Set CRS table property and geometry column comment."""
+    spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('crs' = '{crs}')")
+    spark.sql(
+        f"ALTER TABLE {table_name} "
+        f"ALTER COLUMN geometry COMMENT 'WKT geometry ({crs})'"
+    )
+
+
 def full_table_name(catalog: str, schema: str, table_prefix: str, layer: str) -> str:
     return f"{catalog}.{schema}.{table_prefix}{layer}"
