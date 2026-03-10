@@ -20,6 +20,17 @@ def _parse_departments(departments: str) -> list[str]:
     return [d.strip() for d in departments.split(",")]
 
 
+def _set_task_value(spark, key: str, value: object) -> None:
+    """Set a Databricks job task value. No-op outside a job context."""
+    try:
+        from pyspark.dbutils import DBUtils
+
+        dbutils = DBUtils(spark)
+        dbutils.jobs.taskValues.set(key=key, value=value)
+    except Exception:
+        pass
+
+
 @click.group()
 def main():
     """dbtopo - Load IGN BD TOPO into Databricks Delta tables."""
@@ -43,16 +54,22 @@ def download_cmd(
     dept_list = _parse_departments(departments)
     volume_path = f"/Volumes/{catalog}/{schema}/{volume}"
 
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.getOrCreate()
+
     for dept in dept_list:
         print(f"Downloading department {dept}...")
-        download_department(
+        path = download_department(
             dept=dept,
             volume_path=volume_path,
             version=version,
             projection=projection,
             version_date=version_date,
         )
+        _set_task_value(spark, f"archive_path_{dept}", str(path))
 
+    _set_task_value(spark, "departments", dept_list)
     print(f"Download complete: {len(dept_list)} department(s).")
 
 
@@ -92,6 +109,8 @@ def load_cmd(
     volume_path = f"/Volumes/{catalog}/{schema}/{volume}"
     layer_filter = [x.strip() for x in layers.split(",") if x.strip()] if layers else []
 
+    rows_loaded: dict[str, int] = {}
+
     for dept in dept_list:
         dept_code = dept if dept.startswith("D") else f"D{dept}"
         base_name = (
@@ -121,6 +140,7 @@ def load_cmd(
                 extra_columns={"dept": StringType(), "layer": StringType()},
             )
 
+            layer_rows = 0
             pbar = None
             for batch_idx, processed, total, gdf in read_layer_batched(
                 gpkg_path, layer_name, batch_size
@@ -130,6 +150,7 @@ def load_cmd(
 
                 gdf = transform_batch(gdf, dept=dept_code, layer=layer_name)
                 write_batch_to_delta(spark, gdf, table, schema=layer_schema)
+                layer_rows += len(gdf)
 
                 if batch_idx == 0:
                     set_table_geo_metadata(spark, table)
@@ -140,6 +161,10 @@ def load_cmd(
             if pbar:
                 pbar.close()
 
+            rows_loaded[layer_name] = rows_loaded.get(layer_name, 0) + layer_rows
+            _set_task_value(spark, f"rows_{dept}_{layer_name}", layer_rows)
+
+    _set_task_value(spark, "rows_total", rows_loaded)
     print("Load complete.")
 
 
