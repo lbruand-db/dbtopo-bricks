@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-# All 96 metropolitan department codes
-ALL_DEPARTMENTS = [f"{i:03d}" for i in range(1, 96)] + ["2A", "2B"]
+# All 96 metropolitan department codes (020 doesn't exist; Corsica is 02A/02B)
+ALL_DEPARTMENTS = [f"{i:03d}" for i in range(1, 96) if i != 20] + ["02A", "02B"]
 
 
 class IGNConfig(BaseModel):

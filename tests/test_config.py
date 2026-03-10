@@ -23,4 +23,4 @@ def test_resolve_departments_all():
     depts = cfg.resolve_departments()
     assert len(depts) == len(ALL_DEPARTMENTS)
     assert "001" in depts
-    assert "2A" in depts
+    assert "02A" in depts

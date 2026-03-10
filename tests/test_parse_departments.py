@@ -13,7 +13,7 @@ def test_parse_multiple():
 def test_parse_all():
     result = _parse_departments("all")
     assert result == ALL_DEPARTMENTS
-    assert len(result) == 97  # 95 + 2A + 2B
+    assert len(result) == 96  # 001-095 minus 020, plus 02A + 02B
 
 
 def test_parse_all_case_insensitive():
