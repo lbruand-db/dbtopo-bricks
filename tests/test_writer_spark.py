@@ -4,7 +4,11 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from dbtopo.writer import delete_department_rows, set_table_geo_metadata, write_batch_to_delta
+from dbtopo.writer import (
+    delete_department_rows,
+    set_table_geo_metadata,
+    write_batch_to_delta,
+)
 
 
 class TestDeleteDepartmentRows:
