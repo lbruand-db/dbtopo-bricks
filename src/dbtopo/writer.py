@@ -23,8 +23,7 @@ def set_table_geo_metadata(spark, table_name: str, crs: str = "EPSG:4326") -> No
     """Set CRS table property and geometry column comment."""
     spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('crs' = '{crs}')")
     spark.sql(
-        f"ALTER TABLE {table_name} "
-        f"ALTER COLUMN geometry COMMENT 'WKT geometry ({crs})'"
+        f"ALTER TABLE {table_name} ALTER COLUMN geometry COMMENT 'WKT geometry ({crs})'"
     )
 
 
