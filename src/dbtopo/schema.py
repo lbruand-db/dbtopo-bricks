@@ -7,6 +7,7 @@ from pathlib import Path
 import pyogrio
 from pyspark.sql.types import (
     BooleanType,
+    DataType,
     DoubleType,
     IntegerType,
     LongType,
@@ -38,7 +39,7 @@ _OGR_SUBTYPE_OVERRIDE = {
 def spark_schema_from_gpkg(
     gpkg_path: str | Path,
     layer: str,
-    extra_columns: dict[str, object] | None = None,
+    extra_columns: dict[str, DataType] | None = None,
 ) -> StructType:
     """Derive a Spark StructType from the GPKG layer definition.
 
