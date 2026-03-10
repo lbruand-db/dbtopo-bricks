@@ -13,7 +13,12 @@ from dbtopo.gpkg_reader import list_layers, read_layer_batched
 from dbtopo.schema import spark_schema_from_gpkg
 from dbtopo.task_values import set_task_value
 from dbtopo.transformer import transform_batch
-from dbtopo.writer import full_table_name, set_table_geo_metadata, write_batch_to_delta
+from dbtopo.writer import (
+    delete_department_rows,
+    full_table_name,
+    set_table_geo_metadata,
+    write_batch_to_delta,
+)
 
 
 def _parse_departments(departments: str) -> list[str]:
@@ -133,6 +138,8 @@ def load_cmd(
                 layer_name,
                 extra_columns={"dept": StringType(), "layer": StringType()},
             )
+
+            delete_department_rows(spark, table, dept_code)
 
             layer_rows = 0
             pbar = None

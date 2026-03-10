@@ -4,6 +4,14 @@ import pandas as pd
 from pyspark.sql.types import StructType
 
 
+def delete_department_rows(spark, table_name: str, dept: str) -> None:
+    """Delete existing rows for a department. No-op if table doesn't exist."""
+    try:
+        spark.sql(f"DELETE FROM {table_name} WHERE dept = '{dept}'")
+    except Exception:
+        pass  # Table doesn't exist yet on first run
+
+
 def write_batch_to_delta(
     spark,
     pdf: pd.DataFrame,

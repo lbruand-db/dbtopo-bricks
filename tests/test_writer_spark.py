@@ -4,7 +4,22 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from dbtopo.writer import set_table_geo_metadata, write_batch_to_delta
+from dbtopo.writer import delete_department_rows, set_table_geo_metadata, write_batch_to_delta
+
+
+class TestDeleteDepartmentRows:
+    def test_deletes_by_dept(self):
+        spark = MagicMock()
+        delete_department_rows(spark, "cat.sch.tbl", "D001")
+        spark.sql.assert_called_once_with(
+            "DELETE FROM cat.sch.tbl WHERE dept = 'D001'"
+        )
+
+    def test_noop_when_table_missing(self):
+        spark = MagicMock()
+        spark.sql.side_effect = Exception("Table not found")
+        # Should not raise
+        delete_department_rows(spark, "cat.sch.tbl", "D001")
 
 
 class TestWriteBatchToDelta:
