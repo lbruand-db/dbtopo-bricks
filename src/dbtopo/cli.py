@@ -134,15 +134,13 @@ def load_cmd(
 @main.command()
 @click.option("--catalog", required=True)
 @click.option("--schema", default="ign_bdtopo")
-@click.option("--departments", required=True)
 @click.option("--table-prefix", default="ign_bdtopo_")
-def validate_cmd(catalog, schema, departments, table_prefix):
+def validate_cmd(catalog, schema, table_prefix):
     """Validate loaded data by checking row counts."""
     from pyspark.sql import SparkSession
 
     spark = SparkSession.builder.getOrCreate()
 
-    _parse_departments(departments)  # validate format
     tables = [
         row.tableName
         for row in spark.sql(f"SHOW TABLES IN {catalog}.{schema}").collect()
