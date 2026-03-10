@@ -4,9 +4,6 @@ import tempfile
 from pathlib import Path
 
 import py7zr
-from tqdm import tqdm
-
-WRITE_CHUNK = 1024 * 1024  # 1 MB
 
 
 def list_archive_contents(archive_path: str | Path) -> list[str]:
@@ -44,25 +41,15 @@ def extract_gpkg(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    total = _gpkg_uncompressed_size(archive_path, gpkg_name)
+    total_mb = _gpkg_uncompressed_size(archive_path, gpkg_name) / (1024 * 1024)
+    print(f"Extracting {gpkg_name} ({total_mb:.0f} MB)...")
 
     with py7zr.SevenZipFile(str(archive_path), mode="r") as archive:
-        bio_dict = archive.read(targets=[gpkg_name])
+        archive.extract(targets=[gpkg_name], path=str(output_dir))
 
-    bio = bio_dict[gpkg_name]
     gpkg_path = output_dir / gpkg_name
-    gpkg_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with (
-        tqdm(total=total, unit="B", unit_scale=True, desc="Extracting") as pbar,
-        open(gpkg_path, "wb") as out,
-    ):
-        while True:
-            chunk = bio.read(WRITE_CHUNK)
-            if not chunk:
-                break
-            out.write(chunk)
-            pbar.update(len(chunk))
+    if not gpkg_path.exists():
+        raise FileNotFoundError(f"Extracted file not found at {gpkg_path}")
 
     print(f"Extracted: {gpkg_path}")
     return gpkg_path
