@@ -575,7 +575,6 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyproj", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pyspark" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "shapely" },
@@ -584,6 +583,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pyspark" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
@@ -596,7 +596,6 @@ requires-dist = [
     { name = "py7zr", specifier = ">=0.21" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyproj", specifier = ">=3.6" },
-    { name = "pyspark", specifier = ">=3.5" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.31" },
     { name = "shapely", specifier = ">=2.0" },
@@ -605,6 +604,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pyspark", specifier = ">=3.5" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=5.0" },
 ]
