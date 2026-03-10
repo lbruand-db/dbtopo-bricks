@@ -129,7 +129,7 @@ targets:
       host: https://e2-demo-field-eng.cloud.databricks.com
     variables:
       catalog: "lucasbruand_catalog"
-      departments_json: '["001", "075"]'
+      departments_json: '["001", "069"]'
   staging:
     variables:
       catalog: "staging_catalog"
