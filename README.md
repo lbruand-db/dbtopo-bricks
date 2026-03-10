@@ -12,9 +12,55 @@ Downloads department-level GeoPackage (GPKG) files from IGN's GeoServices, extra
 
 ## Pipeline
 
+```mermaid
+flowchart TB
+    subgraph setup ["1. setup_catalog"]
+        S[Create UC schema + volume]
+    end
+
+    subgraph download ["2. download (for_each department, 10 parallel)"]
+        direction LR
+        D1["Download\nD001.7z"]
+        D2["Download\nD069.7z"]
+        DN["Download\nD0XX.7z"]
+        D1 ~~~ D2 ~~~ DN
+    end
+
+    subgraph load ["3. extract_and_load (for_each department, 10 parallel)"]
+        direction LR
+        subgraph L1 [Department 001]
+            direction TB
+            E1["Extract .7z\n(py7zr)"] --> R1["Read GPKG\n(pyogrio, batched)"]
+            R1 --> T1["Transform\n(reproject → WGS84, WKT)"]
+            T1 --> W1["Write to Delta\n(explicit schema)"]
+        end
+        subgraph L2 [Department 069]
+            direction TB
+            E2["Extract .7z"] --> R2["Read GPKG"]
+            R2 --> T2["Transform"]
+            T2 --> W2["Write to Delta"]
+        end
+        L1 ~~~ L2
+    end
+
+    subgraph dedup ["4. dedup"]
+        DD["For each table:\nROW_NUMBER() OVER (PARTITION BY cleabs)\n→ *_dedup table\n+ copy metadata"]
+    end
+
+    subgraph validate ["5. validate"]
+        V["Check all tables have rows"]
+    end
+
+    setup --> download --> load --> dedup --> validate
+
+    W1 --> BT[(ign_bdtopo_batiment)]
+    W2 --> BT
+    DD --> BTD[(ign_bdtopo_batiment_dedup)]
 ```
-Download (.7z from IGN) → Extract (py7zr) → Read (pyogrio, batched) → Transform (reproject to WGS84, WKT) → Write (Delta)
-```
+
+Each department is processed independently and in parallel (up to 10 concurrent)
+via Databricks Jobs `for_each_task`. The dedup step removes features that appear
+in multiple departments (border overlap), keeping one row per `cleabs` identifier.
 
 ## CI
 
@@ -75,12 +121,13 @@ databricks bundle run bdtopo_load -t prod
 
 ## Job tasks
 
-The `bdtopo_load` job runs on serverless compute with 4 sequential tasks:
+The `bdtopo_load` job runs on serverless compute with 5 tasks:
 
 1. **setup_catalog** — Creates Unity Catalog schema and volume
-2. **download** — Downloads .7z archives from `data.geopf.fr` to a UC volume
-3. **extract_and_load** — Extracts GPKG, reads layers in batches, reprojects to WGS84, writes to Delta
-4. **validate** — Checks that all tables have data
+2. **download** — `for_each_task` over departments (up to 10 parallel). Downloads .7z archives from `data.geopf.fr` to a UC volume with MD5 verification
+3. **extract_and_load** — `for_each_task` over departments (up to 10 parallel). Extracts GPKG, reads layers in batches, reprojects to WGS84, writes to Delta with explicit schema from GPKG metadata
+4. **dedup** — Deduplicates all tables by `cleabs` (IGN unique ID) into `*_dedup` tables, removing border-overlap duplicates. Copies table properties, comments, and column comments
+5. **validate** — Checks that all tables (including `_dedup`) have data
 
 ## Data source
 
@@ -100,21 +147,29 @@ dbtopo-bricks/
 ├── src/dbtopo/
 │   ├── cli.py                  # Click CLI + Databricks entry points
 │   ├── config.py               # Pydantic configuration
-│   ├── downloader.py           # IGN download with retry
+│   ├── dedup.py                # Table deduplication logic
+│   ├── downloader.py           # IGN download with MD5 verification
 │   ├── extractor.py            # 7z extraction
 │   ├── gpkg_reader.py          # Batched pyogrio/geopandas reader
+│   ├── schema.py               # Spark schema from GPKG metadata
+│   ├── task_values.py          # Databricks job task value helpers
 │   ├── transformer.py          # Reproject + WKT conversion
-│   └── writer.py               # Delta table writer
+│   └── writer.py               # Delta table writer + metadata
 ├── tests/
 │   ├── fixtures/
-│   │   ├── test_D001_batiment.gpkg      # 10k features for testing
-│   │   └── test_bad_datetime.gpkg       # Malformed datetime regression test
+│   │   ├── test_D001_batiment.gpkg
+│   │   └── test_bad_datetime.gpkg
 │   ├── test_config.py
+│   ├── test_dedup.py
 │   ├── test_downloader.py
 │   ├── test_extractor.py
 │   ├── test_gpkg_reader.py
+│   ├── test_parse_departments.py
+│   ├── test_schema.py
+│   ├── test_task_values.py
 │   ├── test_transformer.py
-│   └── test_writer.py
+│   ├── test_writer.py
+│   └── test_writer_spark.py
 └── SPECS/
     └── SPEC.md                 # Detailed specification
 ```
