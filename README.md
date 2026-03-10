@@ -12,51 +12,7 @@ Downloads department-level GeoPackage (GPKG) files from IGN's GeoServices, extra
 
 ## Pipeline
 
-```mermaid
-flowchart TB
-    subgraph setup ["1. setup_catalog"]
-        S[Create UC schema + volume]
-    end
-
-    subgraph download ["2. download (for_each department, 10 parallel)"]
-        direction LR
-        D1["Download\nD001.7z"]
-        D2["Download\nD069.7z"]
-        DN["Download\nD0XX.7z"]
-        D1 ~~~ D2 ~~~ DN
-    end
-
-    subgraph load ["3. extract_and_load (for_each department, 10 parallel)"]
-        direction LR
-        subgraph L1 [Department 001]
-            direction TB
-            E1["Extract .7z\n(py7zr)"] --> R1["Read GPKG\n(pyogrio, batched)"]
-            R1 --> T1["Transform\n(reproject → WGS84, WKT)"]
-            T1 --> W1["Write to Delta\n(explicit schema)"]
-        end
-        subgraph L2 [Department 069]
-            direction TB
-            E2["Extract .7z"] --> R2["Read GPKG"]
-            R2 --> T2["Transform"]
-            T2 --> W2["Write to Delta"]
-        end
-        L1 ~~~ L2
-    end
-
-    subgraph dedup ["4. dedup"]
-        DD["For each table:\nROW_NUMBER() OVER (PARTITION BY cleabs)\n→ *_dedup table\n+ copy metadata"]
-    end
-
-    subgraph validate ["5. validate"]
-        V["Check all tables have rows"]
-    end
-
-    setup --> download --> load --> dedup --> validate
-
-    W1 --> BT[(ign_bdtopo_batiment)]
-    W2 --> BT
-    DD --> BTD[(ign_bdtopo_batiment_dedup)]
-```
+![Pipeline diagram](docs/img/process.svg)
 
 Each department is processed independently and in parallel (up to 10 concurrent)
 via Databricks Jobs `for_each_task`. The dedup step removes features that appear
