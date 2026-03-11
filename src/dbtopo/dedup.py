@@ -18,11 +18,8 @@ def get_table_metadata(
     }
 
     comment_rows = spark.sql(f"DESCRIBE TABLE EXTENDED {table_name}").collect()
-    table_comment = ""
-    for row in comment_rows:
-        if row.col_name == "Comment":
-            table_comment = row.data_type or ""
-            break
+    comment_row = next((row for row in comment_rows if row.col_name == "Comment"), None)
+    table_comment = (comment_row.data_type or "") if comment_row else ""
 
     col_comments: dict[str, str] = {}
     for row in comment_rows:
