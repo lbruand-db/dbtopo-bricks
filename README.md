@@ -122,8 +122,7 @@ dbtopo-bricks/
 ├── notebooks/
 │   ├── 00_setup_catalog.py     # UC resource creation
 │   ├── 01_validate_native_geometry.py  # Comprehensive geometry validation
-│   ├── 02_list_layer_sizes.py  # Layer size exploration
-│   └── test_parallel_ingestion.py  # Benchmark: sequential vs mapInPandas parallel
+│   └── 02_list_layer_sizes.py  # Layer size exploration
 ├── src/dbtopo/
 │   ├── cli.py                  # Click CLI + Databricks entry points
 │   ├── config.py               # Pydantic configuration

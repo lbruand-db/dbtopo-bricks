@@ -414,8 +414,7 @@ dbtopo-bricks/
 ├── databricks.yml               # DAB bundle definition
 ├── pyproject.toml               # Python package + entry points
 ├── notebooks/
-│   ├── 00_setup_catalog.py      # UC resource creation (schema, volume)
-│   └── test_parallel_ingestion.py  # Benchmark: sequential vs mapInPandas
+│   └── 00_setup_catalog.py      # UC resource creation (schema, volume)
 ├── src/
 │   └── dbtopo/
 │       ├── __init__.py
