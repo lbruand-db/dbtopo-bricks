@@ -5,10 +5,15 @@ import warnings
 import geopandas as gpd
 
 
-def reproject(gdf: gpd.GeoDataFrame, target_crs: str = "EPSG:4326") -> gpd.GeoDataFrame:
-    if gdf.crs is None or str(gdf.crs) == target_crs:
-        return gdf
-    return gdf.to_crs(target_crs)
+def get_source_srid(gdf: gpd.GeoDataFrame) -> int:
+    """Extract the EPSG SRID from a GeoDataFrame's CRS.
+
+    Returns 0 if the CRS is missing or has no EPSG code.
+    """
+    if gdf.crs is None:
+        return 0
+    epsg = gdf.crs.to_epsg()
+    return epsg if epsg is not None else 0
 
 
 def geometry_to_wkt(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -26,25 +31,18 @@ def add_metadata(gdf: gpd.GeoDataFrame, dept: str, layer: str) -> gpd.GeoDataFra
     return gdf
 
 
-def normalize_datetimes(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Convert all datetime columns to ISO strings for consistent Delta schema."""
-    import numpy as np
-
-    gdf = gdf.copy()
-    for col in gdf.columns:
-        if hasattr(gdf[col], "dt") and np.issubdtype(gdf[col].dtype, np.datetime64):
-            gdf[col] = gdf[col].dt.strftime("%Y-%m-%dT%H:%M:%S").replace("NaT", None)
-    return gdf
-
-
 def transform_batch(
     gdf: gpd.GeoDataFrame,
     dept: str,
     layer: str,
-    target_crs: str = "EPSG:4326",
-) -> gpd.GeoDataFrame:
-    gdf = reproject(gdf, target_crs)
-    gdf = normalize_datetimes(gdf)
+) -> tuple[gpd.GeoDataFrame, int]:
+    """Transform a batch for Delta ingestion.
+
+    Returns (transformed_gdf, source_srid).  Reprojection and datetime
+    handling are deferred to Databricks (ST_Transform and native
+    TimestampType respectively).
+    """
+    source_srid = get_source_srid(gdf)
     gdf = geometry_to_wkt(gdf)
     gdf = add_metadata(gdf, dept, layer)
-    return gdf
+    return gdf, source_srid
