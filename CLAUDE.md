@@ -16,10 +16,10 @@ Load IGN BD TOPO (French national topographic dataset) into Databricks Delta tab
 | `cli.py` | Click CLI with entry points: `download`, `load`, `dedup`, `validate` |
 | `downloader.py` | Downloads .7z archives from IGN servers to a Databricks Volume |
 | `extractor.py` | Extracts GPKG files from 7z archives using `py7zr.extract()` |
-| `gpkg_reader.py` | Reads GPKG layers in batches via pyogrio |
+| `gpkg_reader.py` | Reads GPKG layers via pyogrio; provides `batch_ranges()` for parallel Spark ingestion and `layer_crs_epsg()` for CRS extraction |
 | `schema.py` | Builds explicit Spark StructType from GPKG metadata (OGR types) |
 | `transformer.py` | Extracts source SRID, converts geometry to WKT, adds dept/layer columns |
-| `writer.py` | Pre-creates tables with metadata, writes batches to Delta with ST_GeomFromWKT + ST_Transform |
+| `writer.py` | Pre-creates tables with metadata, provides `_ingestion_schema()` for date/timestamp handling, writes to Delta with ST_GeomFromWKT + ST_Transform |
 | `metadata.py` | Bilingual (EN/FR) BD TOPO v3.5 column/table descriptions for 60 layers |
 | `dedup.py` | Deduplicates cross-department overlapping features by `cleabs` |
 | `task_values.py` | Helper for `dbutils.jobs.taskValues.set()` |
@@ -29,7 +29,7 @@ Load IGN BD TOPO (French national topographic dataset) into Databricks Delta tab
 
 ```bash
 uv sync                    # install deps
-uv run pytest              # run tests (72 tests, all use mocked Spark, no Java needed)
+uv run pytest              # run tests (76 tests, all use mocked Spark, no Java needed)
 uvx ruff check src tests   # lint
 uvx ruff format src tests  # format
 ```
@@ -47,7 +47,7 @@ The job resource key is `bdtopo_load` (underscore). The job name is `bdtopo-load
 
 1. **setup_catalog** -- creates catalog/schema/volume if needed
 2. **download** -- `for_each_task` over departments (concurrency 10), downloads .7z archives
-3. **extract_and_load** -- `for_each_task` over departments (concurrency 10), extracts GPKG, transforms, pre-creates tables with column/table comments, loads to Delta with native GEOMETRY. Idempotent: deletes existing dept rows before append.
+3. **extract_and_load** -- `for_each_task` over departments (concurrency 10). Extracts GPKG to Volume, computes batch ranges, then uses Spark `mapInPandas` to read GPKG slices in parallel across executors. Each batch is transformed (WKT + metadata) on the executor, then geometry conversion (`ST_GeomFromWKT` + `ST_Transform`) and date casts (`TRY_CAST`) run server-side. Single distributed Delta write per layer. Idempotent: deletes existing dept rows before append.
 4. **dedup** -- deduplicates all loaded tables by `cleabs` into `*_dedup` tables
 5. **validate** -- validates row counts, native GEOMETRY(4326), SRID, coordinate ranges, ST_* functions
 
@@ -62,11 +62,16 @@ The job resource key is `bdtopo_load` (underscore). The job name is `bdtopo-load
 - **Table metadata**: Tables are pre-created with `CREATE TABLE IF NOT EXISTS ... USING DELTA` with column and table COMMENTs via `ensure_table_with_metadata()`. Descriptions are bilingual (English default, French via `--lang fr`).
 - **PySpark GEOMETRY limitation**: `.collect()` cannot deserialize native GEOMETRY. Wrap in `ST_AsText()` or `ST_AsBinary()` before collecting.
 - **No local reprojection**: CRS reprojection is done server-side via `ST_Transform(ST_GeomFromWKT(wkt, source_srid), 4326)`. No pyproj dependency.
+- **Parallel ingestion via `mapInPandas`**: GPKG batches are read in parallel across Spark executors (not sequentially on the driver). Each batch = one Spark task. The GPKG is extracted to the Volume so all executors can access it via FUSE.
+- **Batch size and executor memory**: Default `--batch-size` is 5000. Each batch is loaded into one serverless executor (1 GB memory limit). Layers with complex geometries (e.g. `batiment` in dense urban departments) need smaller batches. If you hit `MEMORY_LIMIT_SERVERLESS`, reduce `--batch-size`.
+- **Malformed timestamps**: Source data contains invalid timestamps (e.g. `seconds=60`). `TRY_CAST` is used instead of `CAST` so malformed values become NULL rather than erroring.
+- **GPKG extracted to Volume**: `extract_gpkg()` is called with `output_dir` on the Volume (not `/tmp/`) so Spark executors can access the file via FUSE.
 
 ## Targets
 
 | Target | Catalog | Departments | Notes |
 |---|---|---|---|
 | dev | lucasbruand_catalog | all 96 (configurable) | Default target |
+| e2e_test | timo_roest_test | 001, 069 | Fast end-to-end validation |
 | staging | staging_catalog | 001, 075, 092 | |
 | prod | prod_catalog | all 96 | Production mode, service principal |

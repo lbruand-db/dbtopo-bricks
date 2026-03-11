@@ -59,11 +59,12 @@ BD TOPO organizes data into 8 INSPIRE-aligned themes:
 ### Pipeline Steps
 
 ```
-1. Download       → Fetch .7z per department from IGN
-2. Extract        → Decompress to .gpkg files
-3. Read           → Load GPKG layers using GeoPandas/Fiona
-4. Transform      → Convert geometries to WKT/WKB, reproject if needed
-5. Upload/Write   → Write to Databricks Delta tables via Spark
+1. Download       → Fetch .7z per department from IGN to Volume
+2. Extract        → Decompress .gpkg to Volume (shared filesystem for executors)
+3. Read (parallel)→ Spark mapInPandas distributes GPKG batch reads across executors
+4. Transform      → Each executor converts geometry to WKT, adds metadata (dept/layer)
+5. SQL transforms → Server-side ST_GeomFromWKT + ST_Transform + TRY_CAST for dates
+6. Write          → Single distributed Delta write per layer
 ```
 
 ### Step 1: Download
@@ -78,15 +79,19 @@ BD TOPO organizes data into 8 INSPIRE-aligned themes:
 
 ### Step 2: Extract
 
-- Extract `.7z` archive in-memory or to a temp directory using `py7zr`
+- Extract `.7z` archive to the **Volume path** (not a temp directory) using `py7zr`, so Spark executors can access the GPKG via FUSE
 - Locate the `.gpkg` file inside the archive (filter `archive.getnames()` for `.gpkg` extension)
 - The `.gpkg` is nested inside the archive directory structure — use path joining to resolve
 
-### Step 3: Read GPKG
+### Step 3: Read GPKG (parallel via Spark)
 
-- Use `pyogrio` (via `geopandas.read_file(..., engine="pyogrio")`) to read layers from the extracted `.gpkg`
-- Read in **batches** (configurable, default 10,000 features) using `skip_features`/`max_features` to control memory
-- Convert each batch to a `GeoDataFrame`
+- GPKG is extracted to the **Volume** (not `/tmp/`) so all Spark executors can access it via FUSE
+- `batch_ranges()` computes `(offset, size)` tuples on the driver without reading data, using `pyogrio.read_info()` for feature count
+- `layer_crs_epsg()` extracts the source EPSG code from CRS metadata (handles both `"EPSG:2154"` short form and WKT `AUTHORITY` syntax)
+- A small Spark DataFrame of batch ranges is created (one row per batch), repartitioned to one partition per batch
+- `mapInPandas` distributes the actual GPKG reads across Spark executors — each task independently calls `geopandas.read_file(..., engine="pyogrio", skip_features=offset, max_features=batch_size)`
+- `skip_features` is O(1) on GPKG without Arrow mode (pyogrio default via GDAL's `SetNextByIndex`)
+- Default batch size: 5,000 features (serverless executors have 1 GB memory limit; complex geometry layers like `batiment` in dense urban departments need small batches)
 - Allow filtering by layer name (e.g., `batiment`, `troncon_de_route`)
 
 ### Step 4: Transform
@@ -114,11 +119,12 @@ BD TOPO organizes data into 8 INSPIRE-aligned themes:
 
 ### Step 6: Write to Delta
 
-- Convert each GeoPandas batch to a Spark DataFrame via `spark.createDataFrame(batch, schema=layer_schema)`
-- Convert WKT geometry to native `GEOMETRY` type: `ST_GeomFromWKT(geometry, source_srid)`
-- Reproject server-side if needed: `ST_Transform(geom, 4326)`
+- The `mapInPandas` UDF (Step 3) returns pandas DataFrames via Arrow serialization back to Spark
+- Date/timestamp columns are converted to ISO strings inside the UDF (avoids pandas nanosecond Timestamp overflow on historical dates like `1612-01-01`), then cast server-side via `TRY_CAST` (tolerates malformed source timestamps like `seconds=60`)
+- A single `selectExpr` applies geometry conversion (`ST_GeomFromWKT(geometry, source_srid)` + `ST_Transform` if needed) and date/timestamp casts
+- **Single distributed Delta write** per layer via `saveAsTable` (not per-batch appends) — better file sizing and fewer commits
 - Write mode: `append` — accumulate departments into the same table
-- Each batch is written independently, enabling progress tracking
+- If executor OOM occurs (`MEMORY_LIMIT_SERVERLESS`), a descriptive error message is raised suggesting to reduce `--batch-size`
 
 #### Example Table Schema (batiment layer)
 
@@ -378,7 +384,7 @@ databricks:
   volume: "bronze_volume"            # Volume for caching downloaded archives
   table_prefix: "ign_bdtopo_"        # Table name = prefix + layer name
   write_mode: "append"
-  batch_size: 10000                  # Features per batch for streaming writes
+  batch_size: 5000                   # Features per Spark task (keep ≤5K for serverless 1GB executor memory)
 
 transform:
   target_crs: "EPSG:4326"            # Reproject from Lambert 93 to WGS84
@@ -408,7 +414,8 @@ dbtopo-bricks/
 ├── databricks.yml               # DAB bundle definition
 ├── pyproject.toml               # Python package + entry points
 ├── notebooks/
-│   └── 00_setup_catalog.py      # UC resource creation (schema, volume)
+│   ├── 00_setup_catalog.py      # UC resource creation (schema, volume)
+│   └── test_parallel_ingestion.py  # Benchmark: sequential vs mapInPandas
 ├── src/
 │   └── dbtopo/
 │       ├── __init__.py
@@ -416,7 +423,7 @@ dbtopo-bricks/
 │       ├── config.py            # Pydantic config model
 │       ├── downloader.py        # IGN download logic
 │       ├── extractor.py         # 7z extraction
-│       ├── gpkg_reader.py       # GPKG/pyogrio layer reading
+│       ├── gpkg_reader.py       # GPKG batch ranges, CRS extraction, parallel read helpers
 │       ├── metadata.py          # Bilingual column/table descriptions (60 layers)
 │       ├── transformer.py       # Geometry WKT conversion, SRID extraction
 │       └── writer.py            # Delta table creation + writer

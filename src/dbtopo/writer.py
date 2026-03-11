@@ -109,10 +109,12 @@ def _ingestion_schema(schema: StructType) -> tuple[StructType, dict[str, str]]:
     for field in schema.fields:
         if isinstance(field.dataType, DateType):
             fields.append(StructField(field.name, StringType(), nullable=True))
-            casts[field.name] = f"CAST(`{field.name}` AS DATE) AS `{field.name}`"
+            casts[field.name] = f"TRY_CAST(`{field.name}` AS DATE) AS `{field.name}`"
         elif isinstance(field.dataType, TimestampType):
             fields.append(StructField(field.name, StringType(), nullable=True))
-            casts[field.name] = f"CAST(`{field.name}` AS TIMESTAMP) AS `{field.name}`"
+            casts[field.name] = (
+                f"TRY_CAST(`{field.name}` AS TIMESTAMP) AS `{field.name}`"
+            )
         else:
             fields.append(field)
     return StructType(fields), casts

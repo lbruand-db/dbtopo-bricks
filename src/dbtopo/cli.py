@@ -3,21 +3,19 @@ from __future__ import annotations
 import sys
 
 import click
-from tqdm import tqdm
 
 from dbtopo.config import ALL_DEPARTMENTS
 from dbtopo.dedup import dedup_tables
 from dbtopo.downloader import download_department
 from dbtopo.extractor import extract_gpkg
-from dbtopo.gpkg_reader import list_layers, read_layer_batched
+from dbtopo.gpkg_reader import batch_ranges, layer_crs_epsg, list_layers
 from dbtopo.schema import spark_schema_from_gpkg
 from dbtopo.task_values import set_task_value
-from dbtopo.transformer import transform_batch
 from dbtopo.writer import (
+    _ingestion_schema,
     delete_department_rows,
     ensure_table_with_metadata,
     full_table_name,
-    write_batch_to_delta,
 )
 
 
@@ -85,7 +83,13 @@ def download_cmd(
 @click.option(
     "--layers", default="", help="Comma-separated layer names, or empty for all"
 )
-@click.option("--batch-size", default=50000, type=int)
+@click.option(
+    "--batch-size",
+    default=5000,
+    type=int,
+    help="Rows per GPKG read. Each batch becomes one Spark task; "
+    "keep under ~5K for serverless 1GB executor memory limit.",
+)
 @click.option("--table-prefix", default="ign_bdtopo_")
 @click.option(
     "--lang",
@@ -124,8 +128,10 @@ def load_cmd(
         )
         archive_path = f"{volume_path}/{base_name}.7z"
 
+        # Extract to Volume (not /tmp/) so Spark executors can access via FUSE.
+        extract_dir = f"{volume_path}/extracted"
         print(f"Extracting {archive_path}...")
-        gpkg_path = extract_gpkg(archive_path)
+        gpkg_path = extract_gpkg(archive_path, output_dir=extract_dir)
 
         available_layers = list_layers(gpkg_path)
         target_layers = layer_filter if layer_filter else available_layers
@@ -159,36 +165,105 @@ def load_cmd(
 
             delete_department_rows(spark, table, dept_code)
 
-            layer_rows = 0
-            source_srid = 0
-            pbar = None
-            for batch_idx, processed, total, gdf in read_layer_batched(
-                gpkg_path, layer_name, batch_size
-            ):
-                if batch_idx == 0:
-                    pbar = tqdm(total=total, desc=f"    {layer_name}")
+            source_srid = layer_crs_epsg(gpkg_path, layer_name)
+            total, ranges = batch_ranges(gpkg_path, layer_name, batch_size)
 
-                gdf, source_srid = transform_batch(
-                    gdf, dept=dept_code, layer=layer_name
-                )
-                write_batch_to_delta(
-                    spark,
-                    gdf,
-                    table,
-                    schema=layer_schema,
-                    source_srid=source_srid,
-                    target_srid=4326,
-                )
-                layer_rows += len(gdf)
+            if total == 0:
+                print(f"    {layer_name}: 0 rows (empty layer)")
+                rows_loaded[layer_name] = rows_loaded.get(layer_name, 0)
+                set_task_value(spark, f"rows_{dept}_{layer_name}", 0)
+                continue
 
-                if pbar:
-                    pbar.update(len(gdf))
+            # Build ingestion schema: dates/timestamps as strings to avoid
+            # pandas nanosecond overflow on historical dates (e.g. 1612-01-01).
+            ingest_schema, cast_exprs = _ingestion_schema(layer_schema)
+            date_ts_cols = list(cast_exprs.keys())
 
-            if pbar:
-                pbar.close()
+            # Create a Spark DF of batch ranges — one row per batch.
+            gpkg_str = str(gpkg_path)
+            range_rows = [
+                (gpkg_str, layer_name, dept_code, offset, size)
+                for _, offset, size in ranges
+            ]
+            range_df = spark.createDataFrame(
+                range_rows,
+                schema="gpkg_path string, layer string, dept string, "
+                "offset int, batch_size int",
+            )
+            # One partition per batch → one Spark task per GPKG read.
+            range_df = range_df.repartition(len(ranges))
 
+            # UDF: each Spark task reads its GPKG slice, transforms, yields pandas DF.
+            # NOTE: skip_features is O(1) on GPKG without Arrow mode
+            # (pyogrio default). Adding use_arrow=True would regress.
+            def _read_and_transform(iterator, _dt_cols=date_ts_cols):
+                import geopandas as gpd_inner  # noqa: I001
+                from dbtopo.transformer import transform_batch
+
+                for pdf in iterator:
+                    for _, row in pdf.iterrows():
+                        gdf = gpd_inner.read_file(
+                            row["gpkg_path"],
+                            layer=row["layer"],
+                            engine="pyogrio",
+                            skip_features=int(row["offset"]),
+                            max_features=int(row["batch_size"]),
+                        )
+                        if len(gdf) == 0:
+                            continue
+                        gdf, _ = transform_batch(
+                            gdf, dept=row["dept"], layer=row["layer"]
+                        )
+                        # Convert date/timestamp cols to ISO strings so Arrow
+                        # serialisation doesn't hit pandas ns-Timestamp limits.
+                        import numpy as np
+
+                        for c in _dt_cols:
+                            if c in gdf.columns:
+                                mask = gdf[c].isna()
+                                gdf[c] = gdf[c].astype(str)
+                                gdf.loc[mask, c] = np.nan
+                        yield gdf
+
+            result_df = range_df.mapInPandas(_read_and_transform, schema=ingest_schema)
+
+            # Server-side: geometry conversion + date/timestamp casts.
+            select_exprs: list[str] = []
+            for field in layer_schema.fields:
+                if field.name == "geometry":
+                    geom_expr = f"ST_GeomFromWKT(geometry, {source_srid})"
+                    if source_srid != 0 and source_srid != 4326:
+                        geom_expr = f"ST_Transform({geom_expr}, 4326)"
+                    select_exprs.append(f"{geom_expr} AS geometry")
+                elif field.name in cast_exprs:
+                    select_exprs.append(cast_exprs[field.name])
+                else:
+                    select_exprs.append(f"`{field.name}`")
+
+            result_df = result_df.selectExpr(*select_exprs)
+
+            # Write all batches to Delta in a single distributed write.
+            try:
+                result_df.write.format("delta").mode("append").option(
+                    "mergeSchema", "true"
+                ).saveAsTable(table)
+            except Exception as exc:
+                msg = str(exc)
+                if "MEMORY_LIMIT" in msg:
+                    raise RuntimeError(
+                        f"Executor OOM writing {layer_name} for {dept_code} "
+                        f"with batch_size={batch_size}. Each batch is read "
+                        f"into a single executor (1 GB on serverless). "
+                        f"Reduce --batch-size (current: {batch_size}) to "
+                        f"lower per-task memory. Layers with complex "
+                        f"geometries (e.g. batiment) need smaller batches."
+                    ) from exc
+                raise
+
+            layer_rows = total
             rows_loaded[layer_name] = rows_loaded.get(layer_name, 0) + layer_rows
             set_task_value(spark, f"rows_{dept}_{layer_name}", layer_rows)
+            print(f"    {layer_name}: {layer_rows} rows loaded ({len(ranges)} batches)")
 
     set_task_value(spark, "rows_total", rows_loaded)
     set_task_value(spark, "schema", schema)

@@ -22,7 +22,8 @@ in multiple departments (border overlap), keeping one row per `cleabs` identifie
 
 - **Native GEOMETRY type** -- stored as Databricks `GEOMETRY(4326)`, enabling direct use of all `ST_*` geospatial functions
 - **Server-side reprojection** -- Lambert 93 (EPSG:2154) to WGS84 (EPSG:4326) via `ST_Transform`, no local pyproj needed
-- **Native date types** -- `DateType` / `TimestampType` instead of string conversion
+- **Native date types** -- `DateType` / `TimestampType` via `TRY_CAST` (tolerates malformed source timestamps)
+- **Parallel GPKG ingestion** -- batch reads distributed across Spark executors via `mapInPandas`, not sequential on the driver
 - **Rich metadata** -- table and column comments from official IGN BD TOPO v3.5 data model, bilingual (English/French)
 - **48 layers** across 9 INSPIRE themes with full metadata coverage
 - **Flexible compute** -- runs on serverless (client v4+) or classic compute (DBR 17.3 LTS+)
@@ -40,7 +41,7 @@ in multiple departments (border overlap), keeping one row per `cleabs` identifie
 # Install dependencies
 uv sync
 
-# Run tests (72 tests, no Spark/Java needed)
+# Run tests (76 tests, no Spark/Java needed)
 uv run pytest -v
 
 # Build wheel
@@ -83,7 +84,7 @@ The `bdtopo_load` job runs with 6 tasks (default config uses serverless with cli
 
 1. **setup_catalog** -- Creates Unity Catalog schema and volume
 2. **download** -- `for_each_task` over departments (up to 10 parallel). Downloads .7z archives from `data.geopf.fr` to a UC volume with MD5 verification
-3. **extract_and_load** -- `for_each_task` over departments (up to 10 parallel). Extracts GPKG, reads layers in batches via pyogrio, converts geometry to WKT, writes to Delta with `ST_GeomFromWKT` + `ST_Transform` for native GEOMETRY. Tables are pre-created with column and table comments from IGN metadata.
+3. **extract_and_load** -- `for_each_task` over departments (up to 10 parallel). Extracts GPKG to Volume, then uses Spark `mapInPandas` to distribute batch reads across executors in parallel. Each executor reads a GPKG slice via pyogrio, converts geometry to WKT, and returns the data via Arrow. Server-side `ST_GeomFromWKT` + `ST_Transform` converts to native GEOMETRY(4326). Single distributed Delta write per layer. Tables are pre-created with column and table comments from IGN metadata.
 4. **dedup** -- Deduplicates all tables by `cleabs` (IGN unique ID) into `*_dedup` tables, removing border-overlap duplicates
 5. **validate** -- Checks that all tables (including `_dedup`) have data
 6. **validate_native_geometry** -- Comprehensive validation of native GEOMETRY type, SRID, coordinate ranges, ST_* functions, and spatial queries
@@ -121,14 +122,15 @@ dbtopo-bricks/
 ├── notebooks/
 │   ├── 00_setup_catalog.py     # UC resource creation
 │   ├── 01_validate_native_geometry.py  # Comprehensive geometry validation
-│   └── 02_list_layer_sizes.py  # Layer size exploration
+│   ├── 02_list_layer_sizes.py  # Layer size exploration
+│   └── test_parallel_ingestion.py  # Benchmark: sequential vs mapInPandas parallel
 ├── src/dbtopo/
 │   ├── cli.py                  # Click CLI + Databricks entry points
 │   ├── config.py               # Pydantic configuration
 │   ├── dedup.py                # Table deduplication logic
 │   ├── downloader.py           # IGN download with MD5 verification
 │   ├── extractor.py            # 7z extraction
-│   ├── gpkg_reader.py          # Batched pyogrio/geopandas reader
+│   ├── gpkg_reader.py          # GPKG batch ranges + CRS extraction for parallel Spark reads
 │   ├── metadata.py             # Bilingual BD TOPO column/table descriptions
 │   ├── schema.py               # Spark schema from GPKG metadata
 │   ├── task_values.py          # Databricks job task value helpers
