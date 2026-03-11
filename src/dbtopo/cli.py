@@ -135,13 +135,15 @@ def load_cmd(
         gpkg_path = extract_gpkg(archive_path, output_dir=extract_dir)
 
         available_layers = list_layers(gpkg_path)
-        target_layers = layer_filter if layer_filter else available_layers
+        if layer_filter:
+            skipped = set(layer_filter) - set(available_layers)
+            if skipped:
+                print(f"  Skipping unknown layers: {', '.join(sorted(skipped))}")
+            target_layers = [l for l in layer_filter if l in set(available_layers)]
+        else:
+            target_layers = available_layers
 
         for layer_name in target_layers:
-            if layer_name not in available_layers:
-                print(f"  Skipping unknown layer: {layer_name}")
-                continue
-
             table = full_table_name(catalog, schema, table_prefix, layer_name)
             print(f"  Loading layer {layer_name} -> {table}")
 
