@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import datetime
 import logging
 
 import pandas as pd
-from pyspark.sql.types import StructType
+from pyspark.sql.types import DateType, StructType, TimestampType
 
 from dbtopo.metadata import get_column_descriptions, get_table_description
 
@@ -90,6 +91,30 @@ def ensure_table_with_metadata(
     spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ({props})")
 
 
+def _safe_parse_date(val) -> datetime.date | None:
+    """Parse a string to datetime.date, bypassing pandas Timestamp limits."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if isinstance(val, datetime.date):
+        return val
+    try:
+        return datetime.date.fromisoformat(str(val)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_parse_datetime(val) -> datetime.datetime | None:
+    """Parse a string to datetime.datetime, bypassing pandas Timestamp limits."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if isinstance(val, datetime.datetime):
+        return val
+    try:
+        return datetime.datetime.fromisoformat(str(val))
+    except (ValueError, TypeError):
+        return None
+
+
 def write_batch_to_delta(
     spark,
     pdf: pd.DataFrame,
@@ -99,6 +124,18 @@ def write_batch_to_delta(
     target_srid: int = 4326,
 ) -> None:
     if schema is not None:
+        # Coerce pandas object columns to proper types so Arrow serialization
+        # succeeds.  pyogrio returns dates as strings (and historical dates
+        # like "1612-01-01" overflow pandas' nanosecond Timestamp range).
+        # We parse directly to Python datetime.date / datetime.datetime
+        # objects which have no such limitation.
+        for field in schema.fields:
+            if field.name not in pdf.columns:
+                continue
+            if isinstance(field.dataType, DateType):
+                pdf[field.name] = pdf[field.name].apply(_safe_parse_date)
+            elif isinstance(field.dataType, TimestampType):
+                pdf[field.name] = pdf[field.name].apply(_safe_parse_datetime)
         sdf = spark.createDataFrame(pdf, schema=schema)
     else:
         sdf = spark.createDataFrame(pdf)
