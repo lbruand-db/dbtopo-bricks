@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-import datetime
 import logging
 
 import pandas as pd
-from pyspark.sql.types import DateType, StructType, TimestampType
+from pyspark.sql.types import (
+    DateType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 
 from dbtopo.metadata import get_column_descriptions, get_table_description
 
@@ -91,28 +96,26 @@ def ensure_table_with_metadata(
     spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ({props})")
 
 
-def _safe_parse_date(val) -> datetime.date | None:
-    """Parse a string to datetime.date, bypassing pandas Timestamp limits."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    if isinstance(val, datetime.date):
-        return val
-    try:
-        return datetime.date.fromisoformat(str(val)[:10])
-    except (ValueError, TypeError):
-        return None
+def _ingestion_schema(schema: StructType) -> tuple[StructType, dict[str, str]]:
+    """Build a schema for createDataFrame with strings for date/timestamp cols.
 
-
-def _safe_parse_datetime(val) -> datetime.datetime | None:
-    """Parse a string to datetime.datetime, bypassing pandas Timestamp limits."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    if isinstance(val, datetime.datetime):
-        return val
-    try:
-        return datetime.datetime.fromisoformat(str(val))
-    except (ValueError, TypeError):
-        return None
+    Returns (ingestion_schema, cast_exprs) where cast_exprs maps column names
+    to SQL CAST expressions for server-side conversion.  This avoids Python-
+    level row-by-row date parsing and sidesteps pandas' nanosecond Timestamp
+    limits (which reject historical dates like "1612-01-01").
+    """
+    fields: list[StructField] = []
+    casts: dict[str, str] = {}
+    for field in schema.fields:
+        if isinstance(field.dataType, DateType):
+            fields.append(StructField(field.name, StringType(), nullable=True))
+            casts[field.name] = f"CAST(`{field.name}` AS DATE) AS `{field.name}`"
+        elif isinstance(field.dataType, TimestampType):
+            fields.append(StructField(field.name, StringType(), nullable=True))
+            casts[field.name] = f"CAST(`{field.name}` AS TIMESTAMP) AS `{field.name}`"
+        else:
+            fields.append(field)
+    return StructType(fields), casts
 
 
 def write_batch_to_delta(
@@ -123,31 +126,30 @@ def write_batch_to_delta(
     source_srid: int = 0,
     target_srid: int = 4326,
 ) -> None:
+    # Build a string-based ingestion schema so Arrow doesn't choke on dates,
+    # then cast date/timestamp columns and convert geometry server-side in
+    # a single selectExpr pass.
+    cast_exprs: dict[str, str] = {}
     if schema is not None:
-        # Coerce pandas object columns to proper types so Arrow serialization
-        # succeeds.  pyogrio returns dates as strings (and historical dates
-        # like "1612-01-01" overflow pandas' nanosecond Timestamp range).
-        # We parse directly to Python datetime.date / datetime.datetime
-        # objects which have no such limitation.
-        for field in schema.fields:
-            if field.name not in pdf.columns:
-                continue
-            if isinstance(field.dataType, DateType):
-                pdf[field.name] = pdf[field.name].apply(_safe_parse_date)
-            elif isinstance(field.dataType, TimestampType):
-                pdf[field.name] = pdf[field.name].apply(_safe_parse_datetime)
-        sdf = spark.createDataFrame(pdf, schema=schema)
+        ingest_schema, cast_exprs = _ingestion_schema(schema)
+        sdf = spark.createDataFrame(pdf, schema=ingest_schema)
     else:
         sdf = spark.createDataFrame(pdf)
 
-    # Convert WKT string geometry to native GEOMETRY type, with optional
-    # server-side reprojection via ST_Transform.
-    if "geometry" in sdf.columns:
-        other_cols = [c for c in sdf.columns if c != "geometry"]
-        geom_expr = f"ST_GeomFromWKT(geometry, {source_srid})"
-        if source_srid != 0 and source_srid != target_srid:
-            geom_expr = f"ST_Transform({geom_expr}, {target_srid})"
-        select_exprs = other_cols + [f"{geom_expr} AS geometry"]
+    # Build selectExpr: cast dates/timestamps + convert geometry, all at once.
+    select_exprs: list[str] = []
+    for col in sdf.columns:
+        if col == "geometry":
+            geom_expr = f"ST_GeomFromWKT(geometry, {source_srid})"
+            if source_srid != 0 and source_srid != target_srid:
+                geom_expr = f"ST_Transform({geom_expr}, {target_srid})"
+            select_exprs.append(f"{geom_expr} AS geometry")
+        elif col in cast_exprs:
+            select_exprs.append(cast_exprs[col])
+        else:
+            select_exprs.append(f"`{col}`")
+
+    if cast_exprs or "geometry" in sdf.columns:
         sdf = sdf.selectExpr(*select_exprs)
 
     sdf.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(

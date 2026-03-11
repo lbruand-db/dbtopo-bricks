@@ -85,7 +85,7 @@ def download_cmd(
 @click.option(
     "--layers", default="", help="Comma-separated layer names, or empty for all"
 )
-@click.option("--batch-size", default=10000, type=int)
+@click.option("--batch-size", default=50000, type=int)
 @click.option("--table-prefix", default="ign_bdtopo_")
 @click.option(
     "--lang",

@@ -29,13 +29,13 @@ class TestWriteBatchToDelta:
     def test_uses_explicit_schema_when_provided(self):
         spark = MagicMock()
         pdf = pd.DataFrame({"a": [1]})
-        schema = MagicMock()
+        schema = StructType([StructField("a", StringType(), True)])
 
         write_batch_to_delta(spark, pdf, "my_table", schema=schema)
 
         spark.createDataFrame.assert_called_once()
         _, kwargs = spark.createDataFrame.call_args
-        assert kwargs["schema"] is schema
+        assert kwargs["schema"] == schema
 
     def test_infers_schema_when_none(self):
         spark = MagicMock()
@@ -72,7 +72,7 @@ class TestWriteBatchToDelta:
         write_batch_to_delta(spark, pdf, "cat.sch.tbl", source_srid=4326)
 
         sdf.selectExpr.assert_called_once_with(
-            "name", "ST_GeomFromWKT(geometry, 4326) AS geometry"
+            "`name`", "ST_GeomFromWKT(geometry, 4326) AS geometry"
         )
         writer.saveAsTable.assert_called_with("cat.sch.tbl")
 
@@ -88,7 +88,7 @@ class TestWriteBatchToDelta:
         )
 
         sdf.selectExpr.assert_called_once_with(
-            "name",
+            "`name`",
             "ST_Transform(ST_GeomFromWKT(geometry, 2154), 4326) AS geometry",
         )
 
@@ -103,7 +103,7 @@ class TestWriteBatchToDelta:
         )
 
         sdf.selectExpr.assert_called_once_with(
-            "name", "ST_GeomFromWKT(geometry, 4326) AS geometry"
+            "`name`", "ST_GeomFromWKT(geometry, 4326) AS geometry"
         )
 
 
