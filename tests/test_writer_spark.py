@@ -15,9 +15,7 @@ class TestDeleteDepartmentRows:
     def test_deletes_by_dept(self):
         spark = MagicMock()
         delete_department_rows(spark, "cat.sch.tbl", "D001")
-        spark.sql.assert_called_once_with(
-            "DELETE FROM cat.sch.tbl WHERE dept = 'D001'"
-        )
+        spark.sql.assert_called_once_with("DELETE FROM cat.sch.tbl WHERE dept = 'D001'")
 
     def test_noop_when_table_missing(self):
         spark = MagicMock()
