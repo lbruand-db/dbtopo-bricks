@@ -9,6 +9,8 @@ from requests.adapters import HTTPAdapter
 from tqdm import tqdm
 from urllib3.util.retry import Retry
 
+from dbtopo.config import normalize_dept_code
+
 
 def build_download_url(
     version: str,
@@ -16,7 +18,7 @@ def build_download_url(
     dept: str,
     version_date: str,
 ) -> str:
-    dept_code = dept if dept.startswith("D") else f"D{dept}"
+    dept_code = normalize_dept_code(dept)
     base_name = (
         f"BDTOPO_{version}_TOUSTHEMES_GPKG_{projection}_{dept_code}_{version_date}"
     )

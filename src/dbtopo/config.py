@@ -6,6 +6,11 @@ from pydantic import BaseModel
 ALL_DEPARTMENTS = [f"{i:03d}" for i in range(1, 96) if i != 20] + ["02A", "02B"]
 
 
+def normalize_dept_code(dept: str) -> str:
+    """Ensure department code has the 'D' prefix expected by IGN URLs."""
+    return dept if dept.startswith("D") else f"D{dept}"
+
+
 class IGNConfig(BaseModel):
     version: str = "3-5"
     version_date: str = "2025-09-15"

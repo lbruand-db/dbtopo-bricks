@@ -4,7 +4,7 @@ import sys
 
 import click
 
-from dbtopo.config import ALL_DEPARTMENTS
+from dbtopo.config import ALL_DEPARTMENTS, normalize_dept_code
 from dbtopo.dedup import dedup_tables
 from dbtopo.downloader import download_department
 from dbtopo.extractor import extract_gpkg
@@ -123,7 +123,7 @@ def load_cmd(
     rows_loaded: dict[str, int] = {}
 
     for dept in dept_list:
-        dept_code = dept if dept.startswith("D") else f"D{dept}"
+        dept_code = normalize_dept_code(dept)
         base_name = (
             f"BDTOPO_{version}_TOUSTHEMES_GPKG_{projection}_{dept_code}_{version_date}"
         )
