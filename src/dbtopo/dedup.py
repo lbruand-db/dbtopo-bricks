@@ -67,7 +67,9 @@ def dedup_table(
 
     spark.sql(f"""
         CREATE OR REPLACE TABLE {dst} AS
-        SELECT * EXCEPT(rn) FROM (
+        SELECT * EXCEPT(rn, geometry),
+               ST_GeomFromWKT(geometry, 4326) AS geometry
+        FROM (
             SELECT *, ROW_NUMBER() OVER (
                 PARTITION BY {dedup_key} ORDER BY dept
             ) as rn

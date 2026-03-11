@@ -180,6 +180,7 @@ class TestDedupTable:
         assert len(ctas) == 1
         assert "PARTITION BY my_key" in ctas[0]
         assert "dst" in ctas[0]
+        assert "ST_GeomFromWKT(geometry, 4326)" in ctas[0]
 
 
 # ---------------------------------------------------------------------------
