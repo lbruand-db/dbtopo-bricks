@@ -4,11 +4,11 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 
-Load the [IGN BD TOPO](https://geoservices.ign.fr/bdtopo) database (French national topographic dataset) into Databricks Delta tables with geometry support.
+Load the [IGN BD TOPO](https://geoservices.ign.fr/bdtopo) database (French national topographic dataset) into Databricks Delta tables with **native GEOMETRY** support.
 
 ## What it does
 
-Downloads department-level GeoPackage (GPKG) files from IGN's GeoServices, extracts them, reprojects geometries to WGS84, and writes them into Unity Catalog Delta tables — orchestrated as a Databricks Job via Asset Bundles.
+Downloads department-level GeoPackage (GPKG) files from IGN's GeoServices, extracts them, and writes them into Unity Catalog Delta tables using Databricks native `GEOMETRY` type with server-side reprojection via `ST_Transform` -- orchestrated as a Databricks Job via Asset Bundles.
 
 ## Pipeline
 
@@ -18,13 +18,14 @@ Each department is processed independently and in parallel (up to 10 concurrent)
 via Databricks Jobs `for_each_task`. The dedup step removes features that appear
 in multiple departments (border overlap), keeping one row per `cleabs` identifier.
 
-## CI
+## Key features
 
-Every push and pull request to `main` runs three jobs via GitHub Actions:
-
-- **lint** — `ruff check` and `ruff format --check`
-- **typecheck** — `ty check`
-- **test** — `pytest` with the GPKG test fixtures
+- **Native GEOMETRY type** -- stored as Databricks `GEOMETRY(4326)`, enabling direct use of all `ST_*` geospatial functions
+- **Server-side reprojection** -- Lambert 93 (EPSG:2154) to WGS84 (EPSG:4326) via `ST_Transform`, no local pyproj needed
+- **Native date types** -- `DateType` / `TimestampType` instead of string conversion
+- **Rich metadata** -- table and column comments from official IGN BD TOPO v3.5 data model, bilingual (English/French)
+- **48 layers** across 9 INSPIRE themes with full metadata coverage
+- **Flexible compute** -- runs on serverless (client v4+) or classic compute (DBR 17.3 LTS+)
 
 ## Quick start
 
@@ -39,7 +40,7 @@ Every push and pull request to `main` runs three jobs via GitHub Actions:
 # Install dependencies
 uv sync
 
-# Run tests
+# Run tests (72 tests, no Spark/Java needed)
 uv run pytest -v
 
 # Build wheel
@@ -66,9 +67,10 @@ databricks bundle run bdtopo_load --params departments=075,092
 
 | Target | Catalog | Departments | Description |
 | ------ | ------- | ----------- | ----------- |
-| dev | lucasbruand_catalog | 001 | Single department for testing |
+| dev | lucasbruand_catalog | all 96 | Full dataset for development |
+| e2e_test | timo_roest_test | 001 (arrondissement only) | Fast e2e validation |
 | staging | staging_catalog | 001,075,092 | A few departments |
-| prod | prod_catalog | all | All 96+ departments |
+| prod | prod_catalog | all 96 | All departments, production mode |
 
 ```bash
 databricks bundle deploy -t prod
@@ -77,20 +79,38 @@ databricks bundle run bdtopo_load -t prod
 
 ## Job tasks
 
-The `bdtopo_load` job runs on serverless compute with 5 tasks:
+The `bdtopo_load` job runs with 6 tasks (default config uses serverless with client v4+):
 
-1. **setup_catalog** — Creates Unity Catalog schema and volume
-2. **download** — `for_each_task` over departments (up to 10 parallel). Downloads .7z archives from `data.geopf.fr` to a UC volume with MD5 verification
-3. **extract_and_load** — `for_each_task` over departments (up to 10 parallel). Extracts GPKG, reads layers in batches, reprojects to WGS84, writes to Delta with explicit schema from GPKG metadata
-4. **dedup** — Deduplicates all tables by `cleabs` (IGN unique ID) into `*_dedup` tables, removing border-overlap duplicates. Copies table properties, comments, and column comments
-5. **validate** — Checks that all tables (including `_dedup`) have data
+1. **setup_catalog** -- Creates Unity Catalog schema and volume
+2. **download** -- `for_each_task` over departments (up to 10 parallel). Downloads .7z archives from `data.geopf.fr` to a UC volume with MD5 verification
+3. **extract_and_load** -- `for_each_task` over departments (up to 10 parallel). Extracts GPKG, reads layers in batches via pyogrio, converts geometry to WKT, writes to Delta with `ST_GeomFromWKT` + `ST_Transform` for native GEOMETRY. Tables are pre-created with column and table comments from IGN metadata.
+4. **dedup** -- Deduplicates all tables by `cleabs` (IGN unique ID) into `*_dedup` tables, removing border-overlap duplicates
+5. **validate** -- Checks that all tables (including `_dedup`) have data
+6. **validate_native_geometry** -- Comprehensive validation of native GEOMETRY type, SRID, coordinate ranges, ST_* functions, and spatial queries
 
 ## Data source
 
 - **BD TOPO v3.5** from [IGN GeoServices](https://geoservices.ign.fr/bdtopo)
 - Downloaded per department from `data.geopf.fr`
-- 58 layers across 8 themes (administrative, buildings, hydrography, transport, etc.)
-- Source CRS: Lambert 93 (EPSG:2154), reprojected to WGS84 (EPSG:4326)
+- 60 layers across 9 themes (administrative, addresses, buildings, hydrography, named places, land cover, services, transport, regulated zones)
+- Source CRS: Lambert 93 (EPSG:2154), reprojected to WGS84 (EPSG:4326) server-side
+
+## Table metadata
+
+Tables are created with rich metadata from the official IGN BD TOPO v3.5 data model documentation:
+
+- **Table-level comments** describing the layer and its BD TOPO version
+- **Column-level comments** for all known columns (common attributes + layer-specific)
+- **Table properties** storing CRS, BD TOPO version, and version date
+- **Bilingual** -- comments can be in English (default) or French via the `lang` parameter
+
+Example:
+```sql
+DESCRIBE TABLE catalog.schema.ign_bdtopo_batiment;
+-- cleabs    string    Unique object identifier in BD TOPO
+-- hauteur   double    Building height from ground to gutter in meters
+-- geometry  geometry  Native geometry (EPSG:4326), reprojected from Lambert-93 via ST_Transform
+```
 
 ## Project structure
 
@@ -99,7 +119,9 @@ dbtopo-bricks/
 ├── databricks.yml              # DAB bundle definition
 ├── pyproject.toml              # Python package (uv/hatch)
 ├── notebooks/
-│   └── 00_setup_catalog.py     # UC resource creation
+│   ├── 00_setup_catalog.py     # UC resource creation
+│   ├── 01_validate_native_geometry.py  # Comprehensive geometry validation
+│   └── 02_list_layer_sizes.py  # Layer size exploration
 ├── src/dbtopo/
 │   ├── cli.py                  # Click CLI + Databricks entry points
 │   ├── config.py               # Pydantic configuration
@@ -107,9 +129,10 @@ dbtopo-bricks/
 │   ├── downloader.py           # IGN download with MD5 verification
 │   ├── extractor.py            # 7z extraction
 │   ├── gpkg_reader.py          # Batched pyogrio/geopandas reader
+│   ├── metadata.py             # Bilingual BD TOPO column/table descriptions
 │   ├── schema.py               # Spark schema from GPKG metadata
 │   ├── task_values.py          # Databricks job task value helpers
-│   ├── transformer.py          # Reproject + WKT conversion
+│   ├── transformer.py          # CRS extraction + WKT conversion
 │   └── writer.py               # Delta table writer + metadata
 ├── tests/
 │   ├── fixtures/
@@ -120,6 +143,7 @@ dbtopo-bricks/
 │   ├── test_downloader.py
 │   ├── test_extractor.py
 │   ├── test_gpkg_reader.py
+│   ├── test_metadata.py
 │   ├── test_parse_departments.py
 │   ├── test_schema.py
 │   ├── test_task_values.py
@@ -137,11 +161,19 @@ dbtopo-bricks/
 | Download | requests (with retry) |
 | Archive extraction | py7zr |
 | GPKG reading | pyogrio, geopandas |
-| Geometry ops | shapely, pyproj |
+| Geometry | Databricks native GEOMETRY + ST_* functions |
+| CRS reprojection | Databricks ST_Transform (server-side) |
 | Spark / Delta | pyspark (Databricks Runtime) |
 | Package manager | uv |
 | Deployment | Databricks Asset Bundles |
-| Orchestration | Databricks Jobs (serverless) |
+| Orchestration | Databricks Jobs (serverless client v4+ or DBR 17.3 LTS+) |
 | Linting | ruff |
 | Type checking | ty |
 | CI | GitHub Actions |
+
+## Requirements
+
+- **Databricks Runtime 17.3 LTS+** (for native GEOMETRY type and ST_* geospatial functions)
+- If using **serverless compute**, environment client version **4+** is required
+- Unity Catalog enabled workspace
+- Python 3.10+

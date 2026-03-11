@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 from pyspark.sql.types import StructType
+
+from dbtopo.metadata import get_column_descriptions, get_table_description
+
+logger = logging.getLogger(__name__)
 
 
 def delete_department_rows(spark, table_name: str, dept: str) -> None:
@@ -12,46 +18,103 @@ def delete_department_rows(spark, table_name: str, dept: str) -> None:
         pass  # Table doesn't exist yet on first run
 
 
+def _escape_comment(text: str) -> str:
+    """Escape single quotes for use in SQL COMMENT strings."""
+    return text.replace("'", "\\'")
+
+
+def ensure_table_with_metadata(
+    spark,
+    table_name: str,
+    schema: StructType,
+    layer: str,
+    version: str = "3-5",
+    version_date: str = "",
+    crs: str = "EPSG:4326",
+    lang: str = "en",
+) -> None:
+    """Create the table with column and table comments if it doesn't exist.
+
+    Uses CREATE TABLE IF NOT EXISTS ... USING DELTA with per-column COMMENT
+    clauses and a table-level COMMENT, so metadata is set at creation time.
+    Also sets table properties for CRS and version info.
+
+    Parameters
+    ----------
+    lang : str
+        Language for metadata comments ("en" or "fr"). Defaults to "en".
+    """
+    col_descs = get_column_descriptions(layer, lang=lang)
+    table_desc = get_table_description(
+        layer, version=version, version_date=version_date, lang=lang
+    )
+
+    # Build column definitions from the Spark schema.
+    # The geometry column is STRING in the StructType (WKT from pyogrio),
+    # but must be declared as native GEOMETRY(srid) in the table so that
+    # write_batch_to_delta's ST_GeomFromWKT output is schema-compatible
+    # and the entire table is constrained to a single SRID.
+    srid = crs.split(":")[1] if ":" in crs else "4326"
+    col_defs = []
+    for field in schema.fields:
+        if field.name == "geometry":
+            col_type = f"GEOMETRY({srid})"
+        else:
+            col_type = field.dataType.simpleString()
+        col_sql = f"`{field.name}` {col_type}"
+        if field.name in col_descs:
+            col_sql += f" COMMENT '{_escape_comment(col_descs[field.name])}'"
+        else:
+            logger.warning(
+                "No metadata for column '%s' in layer '%s'",
+                field.name,
+                layer,
+            )
+        col_defs.append(col_sql)
+
+    cols_str = ",\n  ".join(col_defs)
+    create_sql = (
+        f"CREATE TABLE IF NOT EXISTS {table_name} (\n"
+        f"  {cols_str}\n"
+        f") USING DELTA\n"
+        f"COMMENT '{_escape_comment(table_desc)}'"
+    )
+    spark.sql(create_sql)
+
+    # Set table properties for programmatic access.
+    props = f"'crs' = '{crs}'"
+    if version:
+        props += f", 'bdtopo_version' = '{version}'"
+    if version_date:
+        props += f", 'bdtopo_version_date' = '{version_date}'"
+    spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ({props})")
+
+
 def write_batch_to_delta(
     spark,
     pdf: pd.DataFrame,
     table_name: str,
     schema: StructType | None = None,
+    source_srid: int = 0,
+    target_srid: int = 4326,
 ) -> None:
     if schema is not None:
         sdf = spark.createDataFrame(pdf, schema=schema)
     else:
         sdf = spark.createDataFrame(pdf)
+
+    # Convert WKT string geometry to native GEOMETRY type, with optional
+    # server-side reprojection via ST_Transform.
+    if "geometry" in sdf.columns:
+        other_cols = [c for c in sdf.columns if c != "geometry"]
+        geom_expr = f"ST_GeomFromWKT(geometry, {source_srid})"
+        if source_srid != 0 and source_srid != target_srid:
+            geom_expr = f"ST_Transform({geom_expr}, {target_srid})"
+        select_exprs = other_cols + [f"{geom_expr} AS geometry"]
+        sdf = sdf.selectExpr(*select_exprs)
+
     sdf.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(
         table_name
-    )
-
-
-def set_table_geo_metadata(
-    spark,
-    table_name: str,
-    crs: str = "EPSG:4326",
-    source_schema: str = "",
-    version: str = "",
-    version_date: str = "",
-) -> None:
-    """Set CRS, source info as table properties and comments."""
-    props = f"'crs' = '{crs}'"
-    comment_parts = [f"IGN BD TOPO {version}"]
-    if source_schema:
-        props += f", 'source_schema' = '{source_schema}'"
-    if version:
-        props += f", 'bdtopo_version' = '{version}'"
-    if version_date:
-        props += f", 'bdtopo_version_date' = '{version_date}'"
-        comment_parts.append(f"date={version_date}")
-    comment_parts.append(f"geometry={crs}")
-    comment = ", ".join(comment_parts)
-
-    spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ({props})")
-    spark.sql(f"COMMENT ON TABLE {table_name} IS '{comment}'")
-    spark.sql(
-        f"ALTER TABLE {table_name} ALTER COLUMN geometry COMMENT 'WKT geometry ({crs})'"
     )
 
 

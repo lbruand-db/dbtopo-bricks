@@ -110,10 +110,10 @@ resources:
       environments:
         - environment_key: minimal
           spec:
-            client: "2"
+            client: "4"
         - environment_key: wheel_only
           spec:
-            client: "2"
+            client: "4"
             dependencies:
               - "dist/*.whl"
               - "numpy<2"
@@ -122,7 +122,7 @@ resources:
               - pyyaml
         - environment_key: geo
           spec:
-            client: "2"
+            client: "4"
             dependencies:
               - "dist/*.whl"
               - "numpy<2"
@@ -130,7 +130,7 @@ resources:
               - geopandas
               - pyogrio
               - shapely
-              - pyproj
+              # pyproj removed — reprojection done server-side via ST_Transform
               - tqdm
               - requests
               - pydantic

@@ -47,8 +47,8 @@ def test_read_bad_datetime_gpkg():
     gdf = read_layer(BAD_DATETIME_GPKG, "batiment")
     assert len(gdf) == 1
 
-    # Transform should produce consistent string types for all columns
-    result = transform_batch(gdf, dept="D001", layer="batiment")
+    # Transform should produce consistent types for all columns
+    result, source_srid = transform_batch(gdf, dept="D001", layer="batiment")
     assert len(result) == 1
     assert "dept" in result.columns
 

@@ -1,12 +1,10 @@
 import geopandas as gpd
-import pandas as pd
 from shapely.geometry import Point
 
 from dbtopo.transformer import (
     add_metadata,
     geometry_to_wkt,
-    normalize_datetimes,
-    reproject,
+    get_source_srid,
     transform_batch,
 )
 
@@ -19,20 +17,20 @@ def _make_gdf(crs="EPSG:2154"):
     )
 
 
-def test_reproject_to_wgs84():
+def test_get_source_srid():
     gdf = _make_gdf("EPSG:2154")
-    result = reproject(gdf, "EPSG:4326")
-    assert result.crs.to_epsg() == 4326
-    point = result.geometry.iloc[0]
-    # Should be roughly in metropolitan France
-    assert 0 < point.x < 10
-    assert 40 < point.y < 52
+    assert get_source_srid(gdf) == 2154
 
 
-def test_reproject_noop_when_same_crs():
+def test_get_source_srid_wgs84():
     gdf = _make_gdf("EPSG:4326")
-    result = reproject(gdf, "EPSG:4326")
-    assert result is gdf
+    assert get_source_srid(gdf) == 4326
+
+
+def test_get_source_srid_none():
+    gdf = _make_gdf("EPSG:4326")
+    gdf.crs = None
+    assert get_source_srid(gdf) == 0
 
 
 def test_geometry_to_wkt():
@@ -49,37 +47,18 @@ def test_add_metadata():
     assert result["layer"].iloc[0] == "batiment"
 
 
-def test_normalize_datetimes():
-    gdf = gpd.GeoDataFrame(
-        {
-            "name": ["A"],
-            "date_creation": pd.to_datetime(["2021-12-15T17:30:00"]),
-            "some_int": [42],
-        },
-        geometry=[Point(0, 0)],
-        crs="EPSG:4326",
-    )
-    result = normalize_datetimes(gdf)
-    assert result["date_creation"].iloc[0] == "2021-12-15T17:30:00"
-    assert not pd.api.types.is_datetime64_any_dtype(result["date_creation"])
-    assert result["some_int"].iloc[0] == 42  # non-datetime untouched
-
-
-def test_normalize_datetimes_with_nat():
-    gdf = gpd.GeoDataFrame(
-        {
-            "date_creation": pd.to_datetime(["2021-12-15T17:30:00", pd.NaT]),
-        },
-        geometry=[Point(0, 0), Point(1, 1)],
-        crs="EPSG:4326",
-    )
-    result = normalize_datetimes(gdf)
-    assert result["date_creation"].iloc[0] == "2021-12-15T17:30:00"
-    assert pd.isna(result["date_creation"].iloc[1])
-
-
 def test_transform_batch():
     gdf = _make_gdf("EPSG:2154")
-    result = transform_batch(gdf, "D001", "batiment", "EPSG:4326")
+    result, source_srid = transform_batch(gdf, "D001", "batiment")
     assert "dept" in result.columns
     assert isinstance(result["geometry"].iloc[0], str)
+    assert source_srid == 2154
+
+
+def test_transform_batch_preserves_source_coordinates():
+    """Geometry should NOT be reprojected locally — coordinates stay in source CRS."""
+    gdf = _make_gdf("EPSG:2154")
+    result, _ = transform_batch(gdf, "D001", "batiment")
+    wkt = result["geometry"].iloc[0]
+    # Lambert 93 coordinates are large numbers (e.g. 600000, 6600000)
+    assert "600000" in wkt

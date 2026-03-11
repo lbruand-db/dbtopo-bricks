@@ -8,12 +8,14 @@ import pyogrio
 from pyspark.sql.types import (
     BooleanType,
     DataType,
+    DateType,
     DoubleType,
     IntegerType,
     LongType,
     StringType,
     StructField,
     StructType,
+    TimestampType,
 )
 
 # Mapping from OGR type names to Spark types.
@@ -23,8 +25,8 @@ _OGR_TO_SPARK = {
     "OFTReal": DoubleType(),
     "OFTInteger64": LongType(),
     "OFTBinary": StringType(),
-    "OFTDate": StringType(),  # dates are normalised to strings
-    "OFTDateTime": StringType(),  # datetimes are normalised to strings
+    "OFTDate": DateType(),
+    "OFTDateTime": TimestampType(),
     "OFTTime": StringType(),
 }
 

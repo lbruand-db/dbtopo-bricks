@@ -2,7 +2,9 @@
 
 ## Goal
 
-Load the IGN BD TOPO database (French national topographic dataset) into Databricks Delta tables with full geometry support. The tool downloads department-level GeoPackage (GPKG) files from IGN's GeoServices, extracts and transforms them, and writes them into Unity Catalog Delta tables.
+Load the IGN BD TOPO database (French national topographic dataset) into Databricks Delta tables with native GEOMETRY support. The tool downloads department-level GeoPackage (GPKG) files from IGN's GeoServices, extracts and transforms them, and writes them into Unity Catalog Delta tables using Databricks native geospatial types.
+
+**Runtime requirements:** DBR 17.3 LTS+ on classic compute, or serverless environment client version 4+.
 
 ## Data Source
 
@@ -82,19 +84,20 @@ BD TOPO organizes data into 8 INSPIRE-aligned themes:
 
 ### Step 3: Read GPKG
 
-- Use `fiona` to open layers from the extracted `.gpkg`
-- Read in **batches** (e.g., 10,000 features at a time) using `itertools.islice` on the fiona iterator to control memory
-- Convert each batch to a `GeoDataFrame` via `gpd.GeoDataFrame.from_features(batch)`
+- Use `pyogrio` (via `geopandas.read_file(..., engine="pyogrio")`) to read layers from the extracted `.gpkg`
+- Read in **batches** (configurable, default 10,000 features) using `skip_features`/`max_features` to control memory
+- Convert each batch to a `GeoDataFrame`
 - Allow filtering by layer name (e.g., `batiment`, `troncon_de_route`)
 
 ### Step 4: Transform
 
 - Convert geometry column to **WKT string** via `batch['geometry'].astype(str)`
+- Extract source SRID from GeoDataFrame CRS (e.g., 2154 for Lambert 93)
 - Add metadata columns: `dept` (department code, e.g. `D001`), `layer` (source layer name)
 - Handle schema variations across departments (defensive column merging)
-- Reproject from Lambert 93 (EPSG:2154) to WGS84 (EPSG:4326)
+- **No local reprojection** — reprojection is deferred to Databricks server-side via `ST_Transform`
 
-### Step 5: Write to Delta
+### Step 5: Create Table with Metadata
 
 - **Pre-create the Unity Catalog schema and volume**:
   ```sql
@@ -102,8 +105,18 @@ BD TOPO organizes data into 8 INSPIRE-aligned themes:
   CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.{volume};
   ```
 - **Table naming**: one Delta table per layer, prefixed with `ign_bdtopo_` (e.g., `{catalog}.{schema}.ign_bdtopo_batiment`)
-- **Table creation**: pre-create tables with explicit schema using `CREATE TABLE IF NOT EXISTS ... USING DELTA`
-- Convert each GeoPandas batch to a Spark DataFrame via `spark.createDataFrame(batch)`
+- **Table creation**: pre-create tables with `CREATE TABLE IF NOT EXISTS ... USING DELTA` including:
+  - Per-column `COMMENT` clauses with bilingual descriptions (EN/FR, controlled by `--lang`)
+  - Table-level `COMMENT` with layer description, version, and edition date
+  - `GEOMETRY(4326)` column type (native geometry constrained to WGS84 SRID)
+  - Table properties: `crs`, `bdtopo_version`, `bdtopo_version_date`
+- Column/table descriptions sourced from `metadata.py` module (60 BD TOPO v3.5 layers)
+
+### Step 6: Write to Delta
+
+- Convert each GeoPandas batch to a Spark DataFrame via `spark.createDataFrame(batch, schema=layer_schema)`
+- Convert WKT geometry to native `GEOMETRY` type: `ST_GeomFromWKT(geometry, source_srid)`
+- Reproject server-side if needed: `ST_Transform(geom, 4326)`
 - Write mode: `append` — accumulate departments into the same table
 - Each batch is written independently, enabling progress tracking
 
@@ -142,17 +155,20 @@ CREATE TABLE IF NOT EXISTS {catalog}.{schema}.ign_bdtopo_batiment (
   origine_du_batiment STRING,
   appariement_fichiers_fonciers STRING,
   identifiants_rnb STRING,
-  geometry STRING
+  geometry GEOMETRY(4326) COMMENT 'Native geometry (EPSG:4326)'
 ) USING DELTA
+COMMENT 'IGN BD TOPO — Buildings, v3-5, edition 2025-09-15'
 ```
 
-Note: schemas vary per layer. The table schema should be inferred from the GPKG layer metadata or from the first batch.
+Note: schemas vary per layer. The table schema is inferred from the GPKG layer metadata via `pyogrio.read_info()`. Date/datetime columns use native Spark `DateType`/`TimestampType`.
 
 ### Geometry in Delta
 
-- Store geometry as **WKT string** column (`geometry`) for maximum compatibility
-- Users can leverage `ST_*` functions (via Sedona / Databricks built-in) on the WKT column
-- Future improvement: use native `GEOMETRY` type once Databricks support matures
+- Store geometry as **native `GEOMETRY(4326)`** column type (Databricks built-in, requires DBR 17.3 LTS+)
+- Column is constrained to SRID 4326 — mismatched SRIDs are rejected at write time
+- WKT strings from GPKG are converted via `ST_GeomFromWKT(geometry, source_srid)`
+- Reprojection from Lambert 93 to WGS84 is done server-side via `ST_Transform`
+- Full `ST_*` function support: `ST_Area`, `ST_Intersects`, `ST_Centroid`, `ST_AsGeoJSON`, etc.
 
 ## Deployment: Databricks Asset Bundles (DABs)
 
@@ -278,7 +294,8 @@ targets:
 | `setup_catalog` | Notebook `00_setup_catalog.py` | Creates catalog, schema, and volume if not exist |
 | `download` | `dbtopo:download` (wheel) | Downloads .7z archives to the volume |
 | `extract_and_load` | `dbtopo:load` (wheel) | Extracts GPKG, reads layers, transforms, writes to Delta |
-| `validate` | `dbtopo:validate` (wheel) | Runs spot-check assertions on Delta tables |
+| `dedup` | `dbtopo:dedup` (wheel) | Deduplicates tables by `cleabs` into `*_dedup` tables |
+| `validate` | `dbtopo:validate` (wheel) | Validates row counts, native GEOMETRY(4326), SRID, coordinates, ST_* functions |
 
 ### Entry Points (pyproject.toml)
 
@@ -289,6 +306,7 @@ dbtopo = "dbtopo.cli:main"
 [project.entry-points."databricks"]
 download = "dbtopo.cli:download"
 load = "dbtopo.cli:load"
+dedup = "dbtopo.cli:dedup"
 validate = "dbtopo.cli:validate"
 ```
 
@@ -299,7 +317,7 @@ validate = "dbtopo.cli:validate"
 uv init
 
 # Add dependencies
-uv add requests tqdm py7zr geopandas fiona shapely pyproj pydantic pyyaml
+uv add requests tqdm py7zr geopandas pyogrio shapely pydantic pyyaml
 
 # Add dev dependencies
 uv add --dev pytest pytest-cov
@@ -373,8 +391,8 @@ transform:
 | Download             | `requests` (with retry adapter)  |
 | Progress             | `tqdm`                           |
 | Archive extraction   | `py7zr`                          |
-| GPKG reading         | `fiona`, `geopandas`             |
-| Geometry ops         | `shapely`, `pyproj`              |
+| GPKG reading         | `pyogrio`, `geopandas`           |
+| Geometry ops         | `shapely`, Databricks `ST_*`     |
 | Spark / Delta write  | `pyspark` (Databricks Runtime)   |
 | Config               | `pydantic` + YAML                |
 | Package manager      | `uv`                             |
@@ -398,9 +416,10 @@ dbtopo-bricks/
 │       ├── config.py            # Pydantic config model
 │       ├── downloader.py        # IGN download logic
 │       ├── extractor.py         # 7z extraction
-│       ├── gpkg_reader.py       # GPKG/Fiona layer reading
-│       ├── transformer.py       # Geometry conversion, CRS
-│       └── writer.py            # Delta table writer
+│       ├── gpkg_reader.py       # GPKG/pyogrio layer reading
+│       ├── metadata.py          # Bilingual column/table descriptions (60 layers)
+│       ├── transformer.py       # Geometry WKT conversion, SRID extraction
+│       └── writer.py            # Delta table creation + writer
 ├── tests/
 │   ├── fixtures/
 │   │   └── expected_features.yaml

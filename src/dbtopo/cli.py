@@ -15,8 +15,8 @@ from dbtopo.task_values import set_task_value
 from dbtopo.transformer import transform_batch
 from dbtopo.writer import (
     delete_department_rows,
+    ensure_table_with_metadata,
     full_table_name,
-    set_table_geo_metadata,
     write_batch_to_delta,
 )
 
@@ -87,6 +87,12 @@ def download_cmd(
 )
 @click.option("--batch-size", default=10000, type=int)
 @click.option("--table-prefix", default="ign_bdtopo_")
+@click.option(
+    "--lang",
+    default="en",
+    type=click.Choice(["en", "fr"]),
+    help="Language for table/column metadata comments (default: en)",
+)
 def load_cmd(
     departments,
     catalog,
@@ -98,6 +104,7 @@ def load_cmd(
     layers,
     batch_size,
     table_prefix,
+    lang,
 ):
     """Extract GPKG from archives, transform, and load into Delta tables."""
     from pyspark.sql import SparkSession
@@ -139,9 +146,21 @@ def load_cmd(
                 extra_columns={"dept": StringType(), "layer": StringType()},
             )
 
+            # Pre-create table with metadata (column/table comments) before loading.
+            ensure_table_with_metadata(
+                spark,
+                table,
+                schema=layer_schema,
+                layer=layer_name,
+                version=version,
+                version_date=version_date,
+                lang=lang,
+            )
+
             delete_department_rows(spark, table, dept_code)
 
             layer_rows = 0
+            source_srid = 0
             pbar = None
             for batch_idx, processed, total, gdf in read_layer_batched(
                 gpkg_path, layer_name, batch_size
@@ -149,18 +168,18 @@ def load_cmd(
                 if batch_idx == 0:
                     pbar = tqdm(total=total, desc=f"    {layer_name}")
 
-                gdf = transform_batch(gdf, dept=dept_code, layer=layer_name)
-                write_batch_to_delta(spark, gdf, table, schema=layer_schema)
+                gdf, source_srid = transform_batch(
+                    gdf, dept=dept_code, layer=layer_name
+                )
+                write_batch_to_delta(
+                    spark,
+                    gdf,
+                    table,
+                    schema=layer_schema,
+                    source_srid=source_srid,
+                    target_srid=4326,
+                )
                 layer_rows += len(gdf)
-
-                if batch_idx == 0:
-                    set_table_geo_metadata(
-                        spark,
-                        table,
-                        source_schema=schema,
-                        version=version,
-                        version_date=version_date,
-                    )
 
                 if pbar:
                     pbar.update(len(gdf))
@@ -212,36 +231,22 @@ def dedup_cmd(catalog, schema, table_prefix, dedup_key, dedup_suffix):
 @click.option("--schema", default="ign_bdtopo")
 @click.option("--table-prefix", default="ign_bdtopo_")
 def validate_cmd(catalog, schema, table_prefix):
-    """Validate loaded data by checking row counts."""
+    """Validate loaded data: row counts, GEOMETRY(4326), SRID, coordinates."""
     from pyspark.sql import SparkSession
 
+    from dbtopo.validator import validate_tables
+
     spark = SparkSession.builder.getOrCreate()
+    failures = validate_tables(spark, catalog, schema, table_prefix)
 
-    tables = [
-        row.tableName
-        for row in spark.sql(f"SHOW TABLES IN {catalog}.{schema}").collect()
-        if row.tableName.startswith(table_prefix)
-    ]
-
-    if not tables:
-        print(f"No tables found with prefix '{table_prefix}' in {catalog}.{schema}")
+    print(f"\n{'=' * 60}")
+    if failures:
+        print(f"VALIDATION FAILED: {len(failures)} check(s) failed:")
+        for f in failures:
+            print(f"  - {f}")
         sys.exit(1)
-
-    all_ok = True
-    for table_name in sorted(tables):
-        fqn = f"{catalog}.{schema}.{table_name}"
-        count = spark.sql(f"SELECT COUNT(*) as cnt FROM {fqn}").collect()[0].cnt
-        if count == 0:
-            print(f"  FAIL: {fqn} is empty")
-            all_ok = False
-        else:
-            print(f"  OK: {fqn} has {count:,} rows")
-
-    if not all_ok:
-        print("Validation failed: some tables are empty.")
-        sys.exit(1)
-
-    print("Validation passed.")
+    else:
+        print("VALIDATION PASSED: all checks succeeded.")
 
 
 # Databricks python_wheel_task entry points.
