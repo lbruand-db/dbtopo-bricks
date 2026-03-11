@@ -13,6 +13,7 @@ from dbtopo.schema import spark_schema_from_gpkg
 from dbtopo.task_values import set_task_value
 from dbtopo.writer import (
     _ingestion_schema,
+    build_select_exprs,
     delete_department_rows,
     ensure_table_with_metadata,
     full_table_name,
@@ -228,18 +229,11 @@ def load_cmd(
             result_df = range_df.mapInPandas(_read_and_transform, schema=ingest_schema)
 
             # Server-side: geometry conversion + date/timestamp casts.
-            select_exprs: list[str] = []
-            for field in layer_schema.fields:
-                if field.name == "geometry":
-                    geom_expr = f"ST_GeomFromWKT(geometry, {source_srid})"
-                    if source_srid != 0 and source_srid != 4326:
-                        geom_expr = f"ST_Transform({geom_expr}, 4326)"
-                    select_exprs.append(f"{geom_expr} AS geometry")
-                elif field.name in cast_exprs:
-                    select_exprs.append(cast_exprs[field.name])
-                else:
-                    select_exprs.append(f"`{field.name}`")
-
+            select_exprs = build_select_exprs(
+                [f.name for f in layer_schema.fields],
+                cast_exprs,
+                source_srid,
+            )
             result_df = result_df.selectExpr(*select_exprs)
 
             # Write all batches to Delta in a single distributed write.

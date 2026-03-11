@@ -122,6 +122,40 @@ def _ingestion_schema(schema: StructType) -> tuple[StructType, dict[str, str]]:
     return StructType(fields), casts
 
 
+def build_select_exprs(
+    columns: list[str],
+    cast_exprs: dict[str, str] | None = None,
+    source_srid: int = 0,
+    target_srid: int = 4326,
+) -> list[str]:
+    """Build selectExpr list: geometry conversion + date/timestamp casts.
+
+    Parameters
+    ----------
+    columns : list[str]
+        Column names in the DataFrame.
+    cast_exprs : dict[str, str] | None
+        Mapping of column name -> SQL CAST expression (from ``_ingestion_schema``).
+    source_srid : int
+        Source SRID for geometry conversion. 0 means unknown.
+    target_srid : int
+        Target SRID. Geometry is reprojected when source != 0 and != target.
+    """
+    cast_exprs = cast_exprs or {}
+    exprs: list[str] = []
+    for col in columns:
+        if col == "geometry":
+            geom_expr = f"ST_GeomFromWKT(geometry, {source_srid})"
+            if source_srid != 0 and source_srid != target_srid:
+                geom_expr = f"ST_Transform({geom_expr}, {target_srid})"
+            exprs.append(f"{geom_expr} AS geometry")
+        elif col in cast_exprs:
+            exprs.append(cast_exprs[col])
+        else:
+            exprs.append(f"`{col}`")
+    return exprs
+
+
 def write_batch_to_delta(
     spark,
     pdf: pd.DataFrame,
@@ -140,18 +174,9 @@ def write_batch_to_delta(
     else:
         sdf = spark.createDataFrame(pdf)
 
-    # Build selectExpr: cast dates/timestamps + convert geometry, all at once.
-    select_exprs: list[str] = []
-    for col in sdf.columns:
-        if col == "geometry":
-            geom_expr = f"ST_GeomFromWKT(geometry, {source_srid})"
-            if source_srid != 0 and source_srid != target_srid:
-                geom_expr = f"ST_Transform({geom_expr}, {target_srid})"
-            select_exprs.append(f"{geom_expr} AS geometry")
-        elif col in cast_exprs:
-            select_exprs.append(cast_exprs[col])
-        else:
-            select_exprs.append(f"`{col}`")
+    select_exprs = build_select_exprs(
+        sdf.columns, cast_exprs, source_srid, target_srid
+    )
 
     if cast_exprs or "geometry" in sdf.columns:
         sdf = sdf.selectExpr(*select_exprs)
