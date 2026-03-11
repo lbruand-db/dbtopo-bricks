@@ -12,6 +12,8 @@ variables:
     default: '["001"]'
   version_date:
     default: "2025-09-15"
+  batch_size:
+    default: "10000"
 
 artifacts:
   dbtopo_wheel:
@@ -75,6 +77,8 @@ resources:
                   - "${var.schema}"
                   - "--volume"
                   - "${var.volume}"
+                  - "--batch-size"
+                  - "${var.batch_size}"
                   - "--layers"
                   - "batiment"
               environment_key: geo
