@@ -139,7 +139,7 @@ def load_cmd(
             skipped = set(layer_filter) - set(available_layers)
             if skipped:
                 print(f"  Skipping unknown layers: {', '.join(sorted(skipped))}")
-            target_layers = [l for l in layer_filter if l in set(available_layers)]
+            target_layers = [ly for ly in layer_filter if ly in set(available_layers)]
         else:
             target_layers = available_layers
 
