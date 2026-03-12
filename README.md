@@ -178,3 +178,7 @@ dbtopo-bricks/
 - If using **serverless compute**, environment client version **4+** is required
 - Unity Catalog enabled workspace
 - Python 3.10+
+
+## Data attribution
+
+This project uses [BD TOPO](https://geoservices.ign.fr/bdtopo) data from the Institut national de l'information geographique et forestiere (IGN), released under the [Licence Ouverte Etalab 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/). This licence permits free use, modification, and redistribution (including commercial) with attribution. Source: IGN -- BD TOPO v3.5.
