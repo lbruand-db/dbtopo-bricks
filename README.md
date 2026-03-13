@@ -6,6 +6,8 @@
 
 Load the [IGN BD TOPO](https://geoservices.ign.fr/bdtopo) database (French national topographic dataset) into Databricks Delta tables with **native GEOMETRY** support.
 
+BD TOPO v3.5 is a comprehensive 3D vector description of the French territory at metric precision, covering 60 layers across 9 themes: administrative boundaries, addresses, buildings, hydrography, named places, land cover, public services, transport networks, and regulated zones. It is maintained by the [Institut national de l'information geographique et forestiere (IGN)](https://www.ign.fr/) and available as open data. See the [official documentation](https://geoservices.ign.fr/sites/default/files/2024-11/DC_BDTOPO_3-5.pdf) for the full data model.
+
 ## What it does
 
 Downloads department-level GeoPackage (GPKG) files from IGN's GeoServices, extracts them, and writes them into Unity Catalog Delta tables using Databricks native `GEOMETRY` type with server-side reprojection via `ST_Transform` -- orchestrated as a Databricks Job via Asset Bundles.

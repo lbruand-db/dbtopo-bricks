@@ -174,9 +174,7 @@ def write_batch_to_delta(
     else:
         sdf = spark.createDataFrame(pdf)
 
-    select_exprs = build_select_exprs(
-        sdf.columns, cast_exprs, source_srid, target_srid
-    )
+    select_exprs = build_select_exprs(sdf.columns, cast_exprs, source_srid, target_srid)
 
     if cast_exprs or "geometry" in sdf.columns:
         sdf = sdf.selectExpr(*select_exprs)
