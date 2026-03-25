@@ -169,7 +169,7 @@ def load_cmd(
             delete_department_rows(spark, table, dept_code)
 
             source_srid = layer_crs_epsg(gpkg_path, layer_name)
-            total, ranges = batch_ranges(gpkg_path, layer_name, batch_size)
+            total, _ = batch_ranges(gpkg_path, layer_name, batch_size)
 
             if total == 0:
                 print(f"    {layer_name}: 0 rows (empty layer)")
@@ -182,84 +182,106 @@ def load_cmd(
             ingest_schema, cast_exprs = _ingestion_schema(layer_schema)
             date_ts_cols = list(cast_exprs.keys())
 
-            # Create a Spark DF of batch ranges — one row per batch.
-            gpkg_str = str(gpkg_path)
-            range_rows = [
-                (gpkg_str, layer_name, dept_code, offset, size)
-                for _, offset, size in ranges
-            ]
-            range_df = spark.createDataFrame(
-                range_rows,
-                schema="gpkg_path string, layer string, dept string, "
-                "offset int, batch_size int",
-            )
-            # One partition per batch → one Spark task per GPKG read.
-            range_df = range_df.repartition(len(ranges))
-
-            # UDF: each Spark task reads its GPKG slice, transforms, yields pandas DF.
-            # NOTE: skip_features is O(1) on GPKG without Arrow mode
-            # (pyogrio default). Adding use_arrow=True would regress.
-            def _read_and_transform(iterator, _dt_cols=date_ts_cols):
-                import geopandas as gpd_inner  # noqa: I001
-                from dbtopo.transformer import transform_batch
-
-                for pdf in iterator:
-                    for _, row in pdf.iterrows():
-                        gdf = gpd_inner.read_file(
-                            row["gpkg_path"],
-                            layer=row["layer"],
-                            engine="pyogrio",
-                            skip_features=int(row["offset"]),
-                            max_features=int(row["batch_size"]),
-                        )
-                        if len(gdf) == 0:
-                            continue
-                        gdf, _ = transform_batch(
-                            gdf, dept=row["dept"], layer=row["layer"]
-                        )
-                        # Convert date/timestamp cols to ISO strings so Arrow
-                        # serialisation doesn't hit pandas ns-Timestamp limits.
-                        import numpy as np
-
-                        for c in _dt_cols:
-                            if c in gdf.columns:
-                                mask = gdf[c].isna()
-                                gdf[c] = gdf[c].astype(str)
-                                gdf.loc[mask, c] = np.nan
-                        yield gdf
-
-            result_df = range_df.mapInPandas(_read_and_transform, schema=ingest_schema)
-
-            # Server-side: geometry conversion + date/timestamp casts.
+            # Server-side select expressions (geometry conversion + casts).
             select_exprs = build_select_exprs(
                 [f.name for f in layer_schema.fields],
                 cast_exprs,
                 source_srid,
             )
-            result_df = result_df.selectExpr(*select_exprs)
 
-            # Write all batches to Delta in a single distributed write.
-            try:
-                result_df.write.format("delta").mode("append").option(
-                    "mergeSchema", "true"
-                ).saveAsTable(table)
-            except Exception as exc:
-                msg = str(exc)
-                if "MEMORY_LIMIT" in msg:
-                    raise RuntimeError(
-                        f"Executor OOM writing {layer_name} for {dept_code} "
-                        f"with batch_size={batch_size}. Each batch is read "
-                        f"into a single executor (1 GB on serverless). "
-                        f"Reduce --batch-size (current: {batch_size}) to "
-                        f"lower per-task memory. Layers with complex "
-                        f"geometries (e.g. batiment) need smaller batches."
-                    ) from exc
-                raise
+            # Adaptive batch size: retry with halved batch on OOM.
+            MIN_BATCH_SIZE = 100
+            current_batch_size = batch_size
+            gpkg_str = str(gpkg_path)
+
+            while True:
+                _, ranges = batch_ranges(gpkg_path, layer_name, current_batch_size)
+
+                range_rows = [
+                    (gpkg_str, layer_name, dept_code, offset, size)
+                    for _, offset, size in ranges
+                ]
+                range_df = spark.createDataFrame(
+                    range_rows,
+                    schema="gpkg_path string, layer string, dept string, "
+                    "offset int, batch_size int",
+                )
+                # One partition per batch → one Spark task per GPKG read.
+                range_df = range_df.repartition(len(ranges))
+
+                # UDF: each Spark task reads its GPKG slice, transforms,
+                # yields pandas DF.
+                # NOTE: skip_features is O(1) on GPKG without Arrow mode
+                # (pyogrio default). Adding use_arrow=True would regress.
+                def _read_and_transform(iterator, _dt_cols=date_ts_cols):
+                    import geopandas as gpd_inner  # noqa: I001
+                    from dbtopo.transformer import transform_batch
+
+                    for pdf in iterator:
+                        for _, row in pdf.iterrows():
+                            gdf = gpd_inner.read_file(
+                                row["gpkg_path"],
+                                layer=row["layer"],
+                                engine="pyogrio",
+                                skip_features=int(row["offset"]),
+                                max_features=int(row["batch_size"]),
+                            )
+                            if len(gdf) == 0:
+                                continue
+                            gdf, _ = transform_batch(
+                                gdf, dept=row["dept"], layer=row["layer"]
+                            )
+                            # Convert date/timestamp cols to ISO strings so
+                            # Arrow serialisation doesn't hit pandas
+                            # ns-Timestamp limits.
+                            import numpy as np
+
+                            for c in _dt_cols:
+                                if c in gdf.columns:
+                                    mask = gdf[c].isna()
+                                    gdf[c] = gdf[c].astype(str)
+                                    gdf.loc[mask, c] = np.nan
+                            yield gdf
+
+                result_df = range_df.mapInPandas(
+                    _read_and_transform, schema=ingest_schema
+                )
+                result_df = result_df.selectExpr(*select_exprs)
+
+                try:
+                    result_df.write.format("delta").mode("append").option(
+                        "mergeSchema", "true"
+                    ).saveAsTable(table)
+                    break  # Success
+                except Exception as exc:
+                    msg = str(exc)
+                    if "MEMORY_LIMIT" not in msg:
+                        raise
+
+                    next_size = current_batch_size // 2
+                    if next_size < MIN_BATCH_SIZE:
+                        raise RuntimeError(
+                            f"Executor OOM writing {layer_name} for "
+                            f"{dept_code} even at batch_size="
+                            f"{current_batch_size}. Minimum "
+                            f"{MIN_BATCH_SIZE} reached."
+                        ) from exc
+
+                    print(
+                        f"    OOM at batch_size={current_batch_size}, "
+                        f"retrying with {next_size}..."
+                    )
+                    # Delete partially written rows before retry.
+                    delete_department_rows(spark, table, dept_code)
+                    current_batch_size = next_size
 
             layer_rows = total
             rows_loaded[layer_name] = rows_loaded.get(layer_name, 0) + layer_rows
             set_task_value(spark, f"rows_{dept}_{layer_name}", layer_rows)
-            print(f"    {layer_name}: {layer_rows} rows loaded ({len(ranges)} batches)")
+            print(
+                f"    {layer_name}: {layer_rows} rows loaded "
+                f"({len(ranges)} batches, batch_size={current_batch_size})"
+            )
 
     set_task_value(spark, "rows_total", rows_loaded)
     set_task_value(spark, "schema", schema)

@@ -80,7 +80,7 @@ resources:
                   - "--batch-size"
                   - "${var.batch_size}"
                   - "--layers"
-                  - "batiment"
+                  - "adresse_ban,aerodrome,batiment,canalisation,commune,cours_d_eau,detail_orographique,equipement_de_transport,ligne_electrique,piste_d_aerodrome,plan_d_eau,poste_de_transformation,pylone,route_numerotee_ou_nommee,troncon_de_route,troncon_de_voie_ferree,voie_ferree_nommee,zone_d_habitation,zone_de_vegetation"
               environment_key: geo
         - task_key: dedup
           depends_on:
