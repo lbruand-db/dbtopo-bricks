@@ -136,6 +136,20 @@ def load_cmd(
         available_layers = list_layers(gpkg_path)
         target_layers = layer_filter if layer_filter else available_layers
 
+        # These departments have individual geometries up to 1.7 MB WKT
+        # (e.g. zone_de_vegetation, commune) that OOM serverless executors
+        # (1 GB limit) even at small batch sizes. Use batch_size=1 so each
+        # executor handles a single row.
+        LARGE_GEOMETRY_DEPTS = {"D005", "D006", "D083"}
+        if dept_code in LARGE_GEOMETRY_DEPTS:
+            effective_batch_size = 1
+            print(
+                f"  {dept_code} has large geometries, "
+                f"using batch_size=1 to avoid executor OOM"
+            )
+        else:
+            effective_batch_size = batch_size
+
         for layer_name in target_layers:
             if layer_name not in available_layers:
                 print(f"  Skipping unknown layer: {layer_name}")
@@ -166,7 +180,7 @@ def load_cmd(
             delete_department_rows(spark, table, dept_code)
 
             source_srid = layer_crs_epsg(gpkg_path, layer_name)
-            total, ranges = batch_ranges(gpkg_path, layer_name, batch_size)
+            total, ranges = batch_ranges(gpkg_path, layer_name, effective_batch_size)
 
             if total == 0:
                 print(f"    {layer_name}: 0 rows (empty layer)")
@@ -252,18 +266,21 @@ def load_cmd(
                 if "MEMORY_LIMIT" in msg:
                     raise RuntimeError(
                         f"Executor OOM writing {layer_name} for {dept_code} "
-                        f"with batch_size={batch_size}. Each batch is read "
-                        f"into a single executor (1 GB on serverless). "
-                        f"Reduce --batch-size (current: {batch_size}) to "
-                        f"lower per-task memory. Layers with complex "
-                        f"geometries (e.g. batiment) need smaller batches."
+                        f"with batch_size={effective_batch_size}. Each batch "
+                        f"is read into a single executor (1 GB on serverless). "
+                        f"Reduce --batch-size (current: {batch_size}) or "
+                        f"lower LARGE_GPKG_THRESHOLD_MB to trigger "
+                        f"batch_size=1 for more departments."
                     ) from exc
                 raise
 
             layer_rows = total
             rows_loaded[layer_name] = rows_loaded.get(layer_name, 0) + layer_rows
             set_task_value(spark, f"rows_{dept}_{layer_name}", layer_rows)
-            print(f"    {layer_name}: {layer_rows} rows loaded ({len(ranges)} batches)")
+            print(
+                f"    {layer_name}: {layer_rows} rows loaded "
+                f"({len(ranges)} batches, batch_size={effective_batch_size})"
+            )
 
     set_task_value(spark, "rows_total", rows_loaded)
     set_task_value(spark, "schema", schema)
